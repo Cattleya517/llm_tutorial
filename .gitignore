@@ -9,3 +9,12 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Datasets
+data/
+
+# Executed notebooks (含 outputs，重跑即可生成)
+*_executed.ipynb
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
