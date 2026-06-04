@@ -314,8 +314,9 @@ Expected: 無 error。
 
 - [ ] **Step 3: 驗證旗標輸出**
 
-Run: `cd /Users/adamw/tutorials/llm_tutorial && uv run python -c "import json; nb=json.load(open('dinov2_boc_source_reading.ipynb')); t=''.join(o.get('text','') for c in nb['cells'] for o in c.get('outputs',[])); print('bag_of_channels : True' in t and 'in_chans (patch): 1' in t)"`
+Run: `cd /Users/adamw/tutorials/llm_tutorial && uv run python -c "s=open('dinov2_boc_source_reading.ipynb').read(); print('bag_of_channels : True' in s and 'in_chans (patch): 1' in s)"`
 Expected: `True`
+(注意:nbformat 的 output `text` 是 list of strings,直接讀原始 JSON 檔做 substring 比 `''.join(o.get('text',''))` 穩。)
 
 - [ ] **Step 4: Commit**
 
@@ -384,7 +385,7 @@ Expected: 無 error（assert 通過代表 shape 正確；若 shape 不符會在�
 
 - [ ] **Step 3: 驗證 shape 與 error 字串都印出來**
 
-Run: `cd /Users/adamw/tutorials/llm_tutorial && uv run python -c "import json; nb=json.load(open('dinov2_boc_source_reading.ipynb')); t=''.join(o.get('text','') for c in nb['cells'] for o in c.get('outputs',[])); print('(2, 1920)' in t and '(2, 5, 196, 384)' in t and 'got 5 channels' in t)"`
+Run: `cd /Users/adamw/tutorials/llm_tutorial && uv run python -c "s=open('dinov2_boc_source_reading.ipynb').read(); print('(2, 1920)' in s and '(2, 5, 196, 384)' in s and 'got 5 channels' in s)"`
 Expected: `True`
 
 - [ ] **Step 4: Commit**
@@ -447,7 +448,7 @@ Expected: 無 error。
 
 - [ ] **Step 3: 驗證融合 shape**
 
-Run: `cd /Users/adamw/tutorials/llm_tutorial && uv run python -c "import json; nb=json.load(open('dinov2_boc_source_reading.ipynb')); t=''.join(o.get('text','') for c in nb['cells'] for o in c.get('outputs',[])); print(t.count('(2, 1920)') >= 2)"`
+Run: `cd /Users/adamw/tutorials/llm_tutorial && uv run python -c "print(open('dinov2_boc_source_reading.ipynb').read().count('(2, 1920)') >= 2)"`
 Expected: `True`(§4 與 §5 各出現一次)
 
 - [ ] **Step 4: Commit**
