@@ -45,9 +45,38 @@ def sec0():
 - toy forward 用 `vit_small`（D=384）**代跑**真實 ViT-L/16（D=1024）：reshape 機制一模一樣，只有 D 數字不同。""")
     code(BOOTSTRAP)
 
+def sec1():
+    md("""## §1 鳥瞰：一次真實特徵抽取的資料流
+
+下圖把四塊原始碼依**資料流**串起來。後面每一節各放大一塊。""")
+    code('''import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(11, 3.2)); ax.axis("off")
+stages = [
+    ("3 資料層\\nSEPARATE_CHANNELS", "hpafov.py:250", "每通道拆成\\n獨立單通道樣本"),
+    ("4 config / hub", "backbones.py:154", "channel_adaptive=True\\nin_chans=1"),
+    ("1 ViT reshape", "vision_transformer.py:310", "x.reshape(B*C,1,H,W)\\n通道推入 batch"),
+    ("2 linear concat", "linear.py:247", "torch.cat 各通道 CLS\\n→ (B, C*D)"),
+]
+n = len(stages)
+for i,(title,loc,desc) in enumerate(stages):
+    x = i/(n) + 0.02
+    ax.add_patch(plt.Rectangle((x,0.35),0.20,0.5, fill=True, facecolor="#eef3fb",
+                               edgecolor="#3a6ea5", lw=1.6, transform=ax.transAxes))
+    ax.text(x+0.10,0.74,title,ha="center",va="center",fontsize=10,weight="bold",transform=ax.transAxes)
+    ax.text(x+0.10,0.58,desc,ha="center",va="center",fontsize=8,transform=ax.transAxes)
+    ax.text(x+0.10,0.42,loc,ha="center",va="center",fontsize=7,color="#a33",transform=ax.transAxes)
+    if i<n-1:
+        ax.annotate("",(x+0.22,0.6),(x+0.20,0.6),xycoords="axes fraction",
+                    arrowprops=dict(arrowstyle="->",lw=1.5,color="#555"))
+ax.text(0.5,0.06,"資料流：通道先被拆獨立 → trunk 只吃單通道 → eval 層再 concat 回來",
+        ha="center",fontsize=9,style="italic",transform=ax.transAxes)
+plt.tight_layout(); plt.show()''')
+
+
 def main():
     cells.clear()
     sec0()
+    sec1()
     nb = new_notebook(cells=list(cells))
     nb.metadata["kernelspec"] = {"display_name": "Python 3", "language": "python", "name": "python3"}
     nbformat.write(nb, "dinov2_boc_source_reading.ipynb")
