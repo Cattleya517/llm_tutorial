@@ -125,12 +125,46 @@ print("in_chans (patch):", model.patch_embed.proj.in_channels, " <- 單通道")
 print("bag_of_channels :", model.bag_of_channels, "        <- BoC 開啟")''')
 
 
+def sec4():
+    md("""## §4 核心①：ViT reshape —— BoC 的靈魂只有兩行
+
+BoC 不在主幹裡。融合縫在 `get_intermediate_layers` 的**進出口各一行 reshape**：
+進口把通道推進 batch 維（讓單通道 backbone 逐通道各跑一次），出口再把 CLS 攤回 `(B, C*D)`。""")
+    src("dinov2/models/vision_transformer.py", "310",
+        'if self.bag_of_channels:\\n'
+        '    B, C, H, W = x.shape\\n'
+        '    x = x.reshape(B * C, 1, H, W)  # 進口：通道推入 batch，逐通道各跑一次單通道 ViT')
+    src("dinov2/models/vision_transformer.py", "329-345",
+        'if self.bag_of_channels:\\n'
+        '    ...\\n'
+        '    # 出口：patch token 還原成 (B, C, N, D)、class token 攤平成 (B, C*D)\\n'
+        '    patch_tokens = [pt.reshape(B, C, pt.shape[-2], pt.shape[-1]) for pt in patch_tokens_per_block]\\n'
+        '    cls_tokens   = [ct.reshape(B, -1) for ct in cls_tokens_per_block]')
+    md("**Live toy forward**（B=2 張、C=5 通道、224×224；vit_small 隨機初始化）。注意 cls 出來是 `(B, C*D)`：")
+    code('''x = torch.randn(2, 5, 224, 224)   # B=2 張，C=5 通道（<10 張，聚焦 shape）
+with torch.no_grad():
+    outs = model.get_intermediate_layers(x, n=1, return_class_token=True, reshape=False)
+patch, cls = outs[0]
+print("輸入            :", tuple(x.shape))
+print("patch tokens    :", tuple(patch.shape), "  = (B, C, N, D)，N=196 個 patch")
+print("class tokens    :", tuple(cls.shape),   "      = (B, C*D) = (2, 5*384)")
+assert tuple(patch.shape) == (2, 5, 196, 384)
+assert tuple(cls.shape) == (2, 1920)''')
+    md("""**error 當教材**：直接餵 5 通道給 `forward_features`（訓練主幹入口）會炸——
+因為 patch_embed 是 `in_chans=1`。這正證明 trunk 是**純單通道**、late-fusion 不在主幹裡：""")
+    code('''try:
+    model.forward_features(torch.randn(2, 5, 224, 224))
+except RuntimeError as e:
+    print("如預期報錯：", str(e).split(chr(10))[0])''')
+
+
 def main():
     cells.clear()
     sec0()
     sec1()
     sec2()
     sec3()
+    sec4()
     nb = new_notebook(cells=list(cells))
     nb.metadata["kernelspec"] = {"display_name": "Python 3", "language": "python", "name": "python3"}
     nbformat.write(nb, "dinov2_boc_source_reading.ipynb")
