@@ -158,6 +158,32 @@ except RuntimeError as e:
     print("如預期報錯：", str(e).split(chr(10))[0])''')
 
 
+def sec5():
+    md("""## §5 核心②：`create_linear_input` —— late fusion 就是一個 `torch.cat`
+
+eval 層怎麼把逐通道的 CLS 變成一條影像特徵？答案就是把各通道 class token `torch.cat` 起來
+（BoC 時 class token 已是 `(B, C*D)`），需要時再接上 patch token 的 avgpool。""")
+    src("dinov2/eval/cell_dino/linear.py", "247",
+        'def create_linear_input(x_tokens_list, use_n_blocks, use_avgpool, bag_of_channels):\n'
+        '    intermediate_output = x_tokens_list[-use_n_blocks:]\n'
+        '    # late fusion：把最後幾個 block 的 class token 串接\n'
+        '    output = torch.cat([class_token for _, class_token in intermediate_output], dim=-1)\n'
+        '    if bag_of_channels and use_avgpool:\n'
+        '        # 可選：再接上 patch token 對 N 取平均（各通道）\n'
+        '        output = torch.cat((output, torch.mean(intermediate_output[-1][0], dim=-2)\n'
+        '                            .reshape(intermediate_output[-1][0].shape[0], -1)), dim=-1)\n'
+        '    return output.reshape(output.shape[0], -1).float()')
+    md("用 §4 跑出來的 `(patch, cls)` 手動重現這個融合（取 1 個 block、不接 avgpool）：")
+    code('''x_tokens_list = [(patch, cls)]          # 模擬 get_intermediate_layers 的回傳
+inter = x_tokens_list[-1:]               # use_n_blocks=1
+fused = torch.cat([ct for _, ct in inter], dim=-1)   # late fusion
+print("融合後影像特徵 :", tuple(fused.shape), "  = (B, C*D)")
+print("逐張獨立        :", "每張 5 個通道的 CLS 串成一條 1920 維向量")
+assert tuple(fused.shape) == (2, 1920)''')
+    md("""> 與直覺相反的 punchline：跨通道推理被刻意**拿掉**了（trunk 看不到別的通道），
+> 融合只發生在最後這個 `cat`。論文證明在大規模下，這種 late fusion **打敗** early fusion 的 Channel-ViT。""")
+
+
 def main():
     cells.clear()
     sec0()
@@ -165,6 +191,7 @@ def main():
     sec2()
     sec3()
     sec4()
+    sec5()
     nb = new_notebook(cells=list(cells))
     nb.metadata["kernelspec"] = {"display_name": "Python 3", "language": "python", "name": "python3"}
     nbformat.write(nb, "dinov2_boc_source_reading.ipynb")
