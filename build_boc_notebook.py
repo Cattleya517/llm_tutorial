@@ -102,11 +102,35 @@ print("每個樣本只帶 1 個通道索引：", sep[:,0].tolist())''')
 > 這條設計把後面 §4/§5 的 late-fusion **逼了出來**——融合只能放在後面做。""")
 
 
+def sec3():
+    md("""## §3 模型怎麼被建出來：config → hub → `self.bag_of_channels`
+
+BoC **不需要新模型**：就是一個標準 DINOv2 ViT，差別只在兩個旗標 `channel_adaptive: true` 與 `in_chans: 1`。
+它們從 train config / hub entrypoint 一路傳到 `DinoVisionTransformer.__init__`。""")
+    src("dinov2/configs/train/cell_dino/vitl16_boc_hpafov.yaml", "4-9",
+        'train:\n  channel_adaptive: true        # 開啟 BoC\n'
+        'student:\n  arch: vit_large\n  patch_size: 16\n  in_chans: 1   # 單通道 backbone')
+    src("dinov2/hub/cell_dino/backbones.py", "154-180",
+        'def channel_adaptive_dino_vitl16(\n'
+        '    ...\n    channel_adaptive: bool = True,\n'
+        '):\n    ...\n    return _make_cell_dino_model(\n'
+        '        ..., in_chans=in_channels, channel_adaptive=channel_adaptive)')
+    src("dinov2/models/vision_transformer.py", "107",
+        'self.bag_of_channels = channel_adaptive   # 旗標落地：之後所有 reshape 都看它')
+    md("我們在**真實類別**上把這條鏈走一遍（用 vit_small 代跑 ViT-L，旗標行為一致）：")
+    code('''from dinov2.models.vision_transformer import vit_small
+model = vit_small(patch_size=16, in_chans=1, channel_adaptive=True, img_size=224).eval()
+print("型別           :", type(model).__name__)
+print("in_chans (patch):", model.patch_embed.proj.in_channels, " <- 單通道")
+print("bag_of_channels :", model.bag_of_channels, "        <- BoC 開啟")''')
+
+
 def main():
     cells.clear()
     sec0()
     sec1()
     sec2()
+    sec3()
     nb = new_notebook(cells=list(cells))
     nb.metadata["kernelspec"] = {"display_name": "Python 3", "language": "python", "name": "python3"}
     nbformat.write(nb, "dinov2_boc_source_reading.ipynb")
