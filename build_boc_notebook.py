@@ -73,10 +73,40 @@ ax.text(0.5,0.06,"資料流：通道先被拆獨立 → trunk 只吃單通道 �
 plt.tight_layout(); plt.show()''')
 
 
+def sec2():
+    md("""## §2 資料層：`SEPARATE_CHANNELS`（channel-agnostic 的源頭）
+
+BoC 的「通道無關」不是模型決定的，是**資料層**決定的：預訓練時每個通道被當成一張**獨立的單通道樣本**，
+backbone 一次只看一個通道，所以它根本沒機會學「跨通道」的東西。""")
+    src("dinov2/data/datasets/cell_dino/hpafov.py", "107",
+        'SEPARATECHANNELS = "separate_channels"  # each channel from each image\n'
+        '# is treated as an independent sample, overrides chosen channel configuration')
+    src("dinov2/data/datasets/cell_dino/hpafov.py", "250-258",
+        '# 原本每張影像有 4 個通道索引：shape (num_images, 4)\n'
+        'self._channels = np.repeat(np.array([[0, 1, 2, 3]]), len(self._image_paths), axis=0).tolist()\n'
+        '...\n'
+        'if self.wildcard == _WildCard.SEPARATECHANNELS.value.upper():\n'
+        '    C = channels.shape[1]\n'
+        '    # 把通道維「攤平」進樣本維：4 通道 x N 張 → 4N 個單通道樣本\n'
+        '    channels = np.concatenate([channels[:, i] for i in range(C)])\n'
+        '    self._channels = np.expand_dims(channels, 1).tolist()')
+    md("用一個迷你 numpy demo 看這個「攤平」到底做了什麼（拿 3 張 4 通道影像示意）：")
+    code('''N, C = 3, 4
+channels = np.repeat(np.array([[0,1,2,3]]), N, axis=0)
+print("拆之前 channels.shape :", channels.shape, "  (N 張, 每張 4 通道)")
+flat = np.concatenate([channels[:, i] for i in range(C)])
+sep = np.expand_dims(flat, 1)
+print("拆之後 sep.shape      :", sep.shape, "  (4N 個獨立單通道樣本)")
+print("每個樣本只帶 1 個通道索引：", sep[:,0].tolist())''')
+    md("""> 結論：trunk 之所以是**純單通道**(`in_chans=1`)，是因為資料層在更上游就保證了「一次只餵一個通道」。
+> 這條設計把後面 §4/§5 的 late-fusion **逼了出來**——融合只能放在後面做。""")
+
+
 def main():
     cells.clear()
     sec0()
     sec1()
+    sec2()
     nb = new_notebook(cells=list(cells))
     nb.metadata["kernelspec"] = {"display_name": "Python 3", "language": "python", "name": "python3"}
     nbformat.write(nb, "dinov2_boc_source_reading.ipynb")
