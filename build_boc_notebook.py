@@ -184,6 +184,28 @@ assert tuple(fused.shape) == (2, 1920)''')
 > 融合只發生在最後這個 `cat`。論文證明在大規模下，這種 late fusion **打敗** early fusion 的 Channel-ViT。""")
 
 
+def sec6():
+    md("""## §6 對照表與收尾
+
+### toy 筆記本 ↔ 官方原始碼對照
+
+| 概念 | `channel_adaptive_dino.ipynb`（toy） | 官方 dinov2 原始碼 |
+|------|--------------------------------------|--------------------|
+| 通道拆獨立 | 手動逐通道切片 | `hpafov.py:250` `np.concatenate` 攤平 |
+| 單通道 backbone | `BoCBackbone`（無 channel embed） | `vit_*(in_chans=1, channel_adaptive=True)` |
+| 通道推入 batch | `for k in range(K)` 迴圈 | `vision_transformer.py:310` `x.reshape(B*C,1,H,W)` |
+| late fusion | `torch.cat(feats, 0)` | `linear.py:247` `create_linear_input` |
+| 旗標 | 常數 `K, D` | `config: channel_adaptive/in_chans` |
+
+### 兩個提醒
+- **官方碼只含 BoC，不含 HA（Hierarchical Attention）。** toy 筆記本的 HA 是依論文 §3.3 重建的，官方 repo 沒有對應檔。
+- toy 用 `D=48`、官方 ViT-L 用 `D=1024`、本筆記本 demo 用 `vit_small D=384`：**reshape 機制完全相同**，只有維度數字不同。
+
+### 延伸
+- 真實權重推論需下載 gated checkpoint 並用 `torch.hub.load(..., 'channel_adaptive_dino_vitl16')`（見 fork 的 `notebooks/cell_dino/inference.ipynb`），需 CUDA 與多 GB 權重，本筆記本刻意不做。
+- 回頭看 `channel_adaptive_dino.ipynb` 的三策略對比（Channel-ViT / BoC / HA），現在你能把每一塊對到真實原始碼了。""")
+
+
 def main():
     cells.clear()
     sec0()
@@ -192,6 +214,7 @@ def main():
     sec3()
     sec4()
     sec5()
+    sec6()
     nb = new_notebook(cells=list(cells))
     nb.metadata["kernelspec"] = {"display_name": "Python 3", "language": "python", "name": "python3"}
     nbformat.write(nb, "dinov2_boc_source_reading.ipynb")
