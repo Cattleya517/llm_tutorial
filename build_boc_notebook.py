@@ -168,10 +168,12 @@ eval 層怎麼把逐通道的 CLS 變成一條影像特徵？答案就是把各�
         '    intermediate_output = x_tokens_list[-use_n_blocks:]\n'
         '    # late fusion：把最後幾個 block 的 class token 串接\n'
         '    output = torch.cat([class_token for _, class_token in intermediate_output], dim=-1)\n'
-        '    if bag_of_channels and use_avgpool:\n'
-        '        # 可選：再接上 patch token 對 N 取平均（各通道）\n'
-        '        output = torch.cat((output, torch.mean(intermediate_output[-1][0], dim=-2)\n'
-        '                            .reshape(intermediate_output[-1][0].shape[0], -1)), dim=-1)\n'
+        '    if bag_of_channels:\n'
+        '        if use_avgpool:   # 可選：再接上 patch token 對 N 取平均（各通道）\n'
+        '            output = torch.cat((output, torch.mean(intermediate_output[-1][0], dim=-2)\n'
+        '                                .reshape(intermediate_output[-1][0].shape[0], -1)), dim=-1)\n'
+        '    else:\n'
+        '        ...               # 非 BoC：avgpool 改對 patch token 直接取平均（另一支）\n'
         '    return output.reshape(output.shape[0], -1).float()')
     md("用 §4 跑出來的 `(patch, cls)` 手動重現這個融合（取 1 個 block、不接 avgpool）：")
     code('''x_tokens_list = [(patch, cls)]          # 模擬 get_intermediate_layers 的回傳
