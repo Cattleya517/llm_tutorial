@@ -18,3 +18,8 @@ data/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+vit_cifar10.pt
+.DS_Store
+.claude/settings.local.json
+.vscode/settings.json
+
