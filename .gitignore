@@ -16,6 +16,13 @@ data/
 # Executed notebooks (含 outputs，重跑即可生成)
 *_executed.ipynb
 
+# Model checkpoints (重訓即可生成)
+models/
+*.pth
+
+# Submission outputs (重跑 notebook 即可生成)
+submissions/
+
 # Jupyter checkpoints
 .ipynb_checkpoints/
 vit_cifar10.pt
