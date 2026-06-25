@@ -6,5 +6,8 @@
       "PowerShell(uv *)",
       "PowerShell(jupyter kernelspec *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "figma-mcp-go"
+  ]
 }
