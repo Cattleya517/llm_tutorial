@@ -17,17 +17,20 @@ Python 3.11+，主要依賴於 `pyproject.toml`。
 |---|---|---|
 | `llm_api.ipynb` | LLM API | OpenAI / 相容 API 呼叫的基本範例 |
 | `RAG/rag_demo.ipynb` | Retrieval-Augmented Generation | 用 PDF 建 Chroma vector DB、LangChain pipeline 查詢 |
-| `vit_mnist.ipynb` | Vision Transformer 原理 | 從零實作 ViT（patch embed、attention、pos encoding），跑 MNIST |
-| `vit_mnist_demo.ipynb` | ViT MNIST demo | `vit_mnist.ipynb` 的簡化展示版本 |
-| `dinov2_pet.ipynb` | DINOv2 + 寵物分類 | 用預訓練 DINOv2-with-registers 做 kNN / Linear Probe，視覺化 attention map |
-| `dbschematest.ipynb` | DB schema → SQL | 用 SQLcoder / Natural-SQL-7b 從 schema 生 SQL 的測試 |
+| `ViT/vit_mnist.ipynb` | Vision Transformer 原理 | 從零實作 ViT（patch embed、attention、pos encoding），跑 MNIST |
+| `ViT/vit_mnist_demo.ipynb` | ViT MNIST demo | `ViT/vit_mnist.ipynb` 的簡化展示版本 |
+| `DINO/dinov2_pet.ipynb` | DINOv2 + 寵物分類 | 用預訓練 DINOv2-with-registers 做 kNN / Linear Probe，視覺化 attention map |
 
 ## 目錄結構
 
 ```
 .
-├── *.ipynb               # 各 tutorial notebook
+├── llm_api.ipynb         # LLM API tutorial
+├── ViT/                  # Vision Transformer 系列（MNIST、CIFAR-10）
+├── DINO/                 # DINOv2 / DINO 系列
 ├── RAG/                  # RAG 教學（含 PDF 教材與已建好的 Chroma DB）
+├── cnn/                  # CNN 系列（retinopathy 等）
+├── lessons/              # SVM 教學課程（/teach workspace：MISSION/NOTES/RESOURCES + lessons）
 ├── data/                 # 資料集（gitignored；notebooks 會自動下載）
 ├── pyproject.toml        # uv 依賴定義
 └── .python-version       # Python 版本（3.11）
