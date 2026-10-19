@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 3 課：記憶</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+
+<h1>第 3 課 · 記憶就是一個 list</h1>
+<p class="meta">agent_basic 讀書會 · 約 11 分鐘 · 對照檔案：<code>01_loop.py</code> 的 <code>messages</code> → <code>agent.py</code> 的 <code>self.conversation_history</code>、<code>_init_system_prompt</code>、<code>reset</code>、<code>__main__</code></p>
+
+<div class="win">
+<strong>這一課的收穫：</strong>讀完後你能指出 <code>conversation_history</code> 從出生（只有一條 system prompt）到每一輪長出 user / assistant / tool 訊息的全過程，並解釋為什麼在 REPL 裡問第二個任務時，agent 會記得第一個。
+</div>
+
+<h2>先講結論</h2>
+<p>agent.py 沒有資料庫、沒有向量檢索、沒有任何「記憶模組」。所謂記憶就是 <code>self.conversation_history</code>，一個普通的 Python list，裡面放 dict。它<strong>只會變長</strong>（<code>execute_task</code> 只做 <code>append</code>），唯一會把它清掉的是 <code>reset()</code>。每一輪問模型，整份 list 都會送出去。第 1 課的 01_loop.py 用 <code>messages</code> 做的事，這裡一模一樣，只是多了名字和一些包裝。</p>
+
+<h2>第 0 條：system prompt（_init_system_prompt）</h2>
+<p>在 VSCode 搜 <code>def __init__</code>（約第 101 行）。往下幾行會看到 <code>self.conversation_history = []</code>，緊接著呼叫 <code>self._init_system_prompt()</code>（約第 141 行）。這個函式把一段長字串包成 list 裡的第一條訊息：</p>
+<pre><code>self.conversation_history = [
+    {"role": "system", "content": system_content}
+]</code></pre>
+<p>所以 agent 一出生，記憶裡就有且只有一條 <code>role: "system"</code>。這段 prompt 不用全文讀，它在要求模型四件事：</p>
+<ul>
+<li>複雜任務（3 步以上）先用 <code>rewrite_todo_list</code> 建 TODO，做一項標一項，一次只能有一項 <code>in_progress</code>（第 5 課）。</li>
+<li>注意訊息前面的時間戳，用它理解事件先後。</li>
+<li>注意 <code>Tool call #n</code> 計數，數字變大代表在鬼打牆，要換策略（第 4 課）。</li>
+<li>做完要寫 <code>FINAL ANSWER:</code> 再接總結（第 6 課；現在真正的結束條件是「沒有 tool_calls」）。</li>
+</ul>
+<p>注意這段只寫<strong>規則和行為原則</strong>，不寫「現在幾點、在哪個目錄」這種每輪會變的東西。Anthropic 的 context engineering 文章把這叫做 system prompt 的「right altitude」：太低變成一堆 if-else 式的硬規則，太高又模糊到沒指引；該放的是穩定不變的工作方式 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">[1]</a>。會變的狀態走另一條路（system hint，第 4 課）。</p>
+
+<h2>list 裡會出現的四種 role</h2>
+<table>
+<tr><th>role</th><th>誰寫的</th><th>agent.py 哪裡 append</th></tr>
+<tr><td><code>system</code></td><td>程式，出生時一次</td><td><code>_init_system_prompt</code></td></tr>
+<tr><td><code>user</code></td><td>你（任務文字）</td><td><code>execute_task</code> 開頭（約第 810 行），前面會貼時間戳</td></tr>
+<tr><td><code>assistant</code></td><td>模型</td><td><code>self.conversation_history.append(message.model_dump())</code>（約第 851、870 行）；帶 <code>tool_calls</code></td></tr>
+<tr><td><code>tool</code></td><td>程式（工具結果）</td><td>執行工具後 <code>append({"role": "tool", "tool_call_id": ..., "content": ...})</code>（約第 888、949 行）</td></tr>
+</table>
+<p><code>message.model_dump()</code> 是把 OpenAI SDK 回傳的 pydantic 物件轉成 dict，這樣它才能和其他手寫的 dict 一起放進同一個 list、下一輪一起送出去。一次「模型叫工具」的迭代會在 list 尾巴長出三條，簡化後長這樣：</p>
+<pre><code>{"role": "user",      "content": "[2026-10-19 10:00:05] 01_loop.py 有幾行？"}
+{"role": "assistant", "content": null,
+                      "tool_calls": [{"id": "call_abc", "type": "function",
+                                      "function": {"name": "execute_command",
+                                                   "arguments": "{\"command\": \"wc -l 01_loop.py\"}"}}]}
+{"role": "tool",      "tool_call_id": "call_abc",
+                      "content": "[2026-10-19 10:00:10] [Tool call #1] {\"stdout\": \"60 01_loop.py\", ...}"}</code></pre>
+<p class="note">實際 dump 出來的 assistant dict 還有 <code>refusal</code>、<code>annotations</code>、<code>reasoning</code> 等幾個多半是 <code>null</code> 的欄位，那是 SDK 的完整結構，看到不要驚訝。</p>
+<p>模型下一輪再叫一次工具，就再長出 assistant + tool 兩條；最後一輪模型不叫工具、直接講話，長出一條 assistant 就結束。這個 role 的交替順序是 API 規定的：每條 <code>tool</code> 都要接在一條帶 <code>tool_calls</code> 的 <code>assistant</code> 後面 <a href="https://openrouter.ai/docs/guides/features/tool-calling">[2]</a>。</p>
+
+<h2>只 append，不刪 → 多輪記憶免費送</h2>
+<p>再看一次 <code>execute_task</code>：它對 <code>conversation_history</code> 做的操作只有 <code>append</code>，函式開頭沒有 <code>= []</code>，結尾也沒有 <code>clear()</code>。所以同一個 <code>SystemHintAgent</code> 物件連續呼叫兩次 <code>execute_task</code>，第二次的 user 訊息會直接接在第一次的完整對話後面；模型看到的是「上一個任務的全部過程 + 新問題」。這就是為什麼第二個任務可以說「剛才那個檔案」。</p>
+<p>搜 <code>def reset</code>（約第 995 行）：它不是 <code>clear()</code>，而是重新呼叫 <code>_init_system_prompt()</code>，<strong>整個 list 換成一條新的 system prompt</strong>。順便也清掉 <code>todo_list</code>、<code>tool_calls</code>、<code>tool_call_counts</code>，那些屬於第 5、6 課。</p>
+<p>再往下看 <code>if __name__ == "__main__"</code>（約第 1008 行）。不帶參數執行就進入 REPL：<code>input("Task > ")</code> 讀一行，打 <code>reset</code> 呼叫 <code>agent.reset()</code>，打 <code>quit</code> 離開，其他都丟給 <code>execute_task</code>。整個 REPL 共用同一個 <code>agent</code>，所以記憶自然跨任務。</p>
+
+<h2>代價：每一輪都送整份</h2>
+<p>搜 <code>messages=messages_to_send</code>（約第 835 行）。送給模型的不是「最新那幾條」而是整份歷史。模型本身沒有狀態，每次呼叫都從零讀起，所以 list 越長，每一輪的輸入 token 就越多：第 10 輪送的東西包含前 9 輪的所有 assistant 和 tool 訊息。即使模型每輪只叫一個工具，成本仍一輪比一輪高，而且 tool 訊息的 <code>content</code> 常常是整個檔案或指令輸出，長得最快。</p>
+<p>Anthropic 的說法是 context 是有限資源，每多塞一個 token 都會稀釋模型的注意力，長對話還會碰到 context window 上限 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">[1]</a>。他們列的對策（compaction、把工具結果精簡、把進度寫成筆記）agent.py 一個都沒做：沒有截斷、沒有摘要，01_loop.py 至少還有 <code>result[:4000]</code>。這是它缺的保護，第 6 課再談。</p>
+
+<h2>兩個先知道就好的細節</h2>
+<p><strong>複本與 hint：</strong>約第 826 行的 <code>messages_to_send = self.conversation_history.copy()</code> 之後 append 的那條 system hint 只存在於複本，不會進 <code>conversation_history</code>，所以歷史裡不會累積一堆狀態摘要；完整說明在<a href="0004-system-hints.html">第 4 課</a>。</p>
+<p><strong>trajectory.json：</strong>搜 <code>def _save_trajectory</code>（約第 216 行），裡面的 <code>"conversation_history": self.conversation_history</code> 就是把這個 list 原封不動 dump 成 JSON。想看記憶長什麼樣，開這個檔就好；它每一輪都會覆寫，所以只反映最近一次執行。第 6 課會把它當回溯工具來用。</p>
+
+<h2>01_loop.py ↔ agent.py 對照</h2>
+<table>
+<tr><th>01_loop.py</th><th>agent.py</th><th>差別</th></tr>
+<tr><td><code>messages = [{"role": "system", ...}, {"role": "user", ...}]</code></td><td><code>_init_system_prompt</code> 建 system；<code>execute_task</code> 開頭 append user</td><td>system 與 user 分兩個時間點放進去，所以同一個 agent 可以接多個任務</td></tr>
+<tr><td><code>messages.append(msg)</code></td><td><code>conversation_history.append(message.model_dump())</code></td><td>轉成 dict 再放，才能 dump 成 JSON</td></tr>
+<tr><td><code>messages.append({"role": "tool", ...})</code></td><td>同樣的 dict，<code>content</code> 前多貼時間戳與 <code>[Tool call #n]</code></td><td>第 4 課</td></tr>
+<tr><td><code>messages=messages</code></td><td><code>messages=messages_to_send</code></td><td>送的是複本 + 一條臨時 hint</td></tr>
+<tr><td>程式結束 list 就消失</td><td>list 活到 <code>reset()</code> 或程式結束</td><td>REPL 裡跨任務記得</td></tr>
+<tr><td><code>result[:4000]</code></td><td><em>沒有對應</em></td><td>歷史無上限地長，第 6 課</td></tr>
+</table>
+
+<div class="skip">
+<h3>這些可以先跳過</h3>
+<ul>
+<li><code>self.provider = "openrouter"</code>：歷史遺留的欄位，現在只有一個值。</li>
+<li><code>verbose</code>：只影響 log 多寡。</li>
+<li><code>self.simulated_time</code> 與 <code>_advance_simulated_time</code>：書裡 demo 用的假時鐘，<code>reset()</code> 裡也重設它。</li>
+<li><code>self.last_llm_messages</code>：記下「上一輪實際送出去的複本」，只為了寫進 trajectory.json 對照用。</li>
+</ul>
+</div>
+
+
+<h2>預測一下</h2>
+<p class="note">選一個答案，立刻看解釋。目的是檢查你有沒有把「只 append、整份送、reset 才清」讀進去，不是考試。</p>
+
+<div class="quiz" data-answer="0">
+<p class="q">在 REPL 打 <code>reset</code> 之後，<code>conversation_history</code> 裡剩什麼？</p>
+<button>只剩系統提示</button>
+<button>完全空的清單</button>
+<button>保留上次對話</button>
+<p class="why"><code>reset()</code> 呼叫 <code>_init_system_prompt()</code>，它把 list 整個換成 <code>[{"role": "system", ...}]</code>。所以不是空 list，而是回到出生狀態：一條 system prompt。</p>
+</div>
+
+<div class="quiz" data-answer="1">
+<p class="q">REPL 裡第二個任務說「剛才那個檔案」，agent 為什麼知道是哪個？</p>
+<button>模型自己記得</button>
+<button>歷史沒有清空</button>
+<button>工具回傳快取</button>
+<p class="why">模型本身沒有狀態，每次呼叫都只看送進來的 messages。第二次 <code>execute_task</code> 只是把新的 user 訊息 append 到舊歷史後面，整份一起送出去，模型才「看到」上一個任務讀過哪個檔。</p>
+</div>
+
+<div class="quiz" data-answer="2">
+<p class="q">模型每一輪都只叫一個工具。從第 2 輪到第 10 輪，每輪送給模型的輸入 token 會怎樣？</p>
+<button>每輪大致相同</button>
+<button>只有首輪較多</button>
+<button>一輪比一輪多</button>
+<p class="why"><code>messages=messages_to_send</code> 送的是整份歷史的複本。每輪至少多兩條（assistant + tool），而且 tool 的 content 沒有截斷，所以輸入 token 單調遞增。這就是「context 是有限資源」的實際成本。</p>
+</div>
+
+<h2>主要來源</h2>
+<p>讀 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic — Effective Context Engineering for AI Agents</a>，「system prompt 的高度」和「context 是有限資源」兩段對應這一課的兩個重點。訊息格式與 role 順序以 <a href="https://openrouter.ai/docs/guides/features/tool-calling">OpenRouter — Tool &amp; Function Calling</a> 為準。</p>
+
+<p class="note">看不懂的地方直接問我（agent）：把 agent.py 的那幾行貼過來問「這一段在幹麻」即可。</p>
+
+<div class="nav">
+<span><a href="0002-tools.html">← 上一課：工具契約與實作</a></span>
+<span><a href="../reference/agent-py-map.html">agent.py 地圖</a> · <a href="../reference/glossary.html">名詞表</a></span>
+<span><a href="0004-system-hints.html">下一課：System hint →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

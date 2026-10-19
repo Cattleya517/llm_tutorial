@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 6 課：保護措施與軌跡</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+
+<h1>第 6 課 · 保護措施與軌跡：agent 哪裡會失控、怎麼回放</h1>
+<p class="meta">agent_basic 讀書會 · 約 12 分鐘 · 對照檔案：<code>agent.py</code> 的 <code>execute_task</code>、<code>_tool_execute_command</code>、<code>_save_trajectory</code>，以及跑完任務後出現的 <code>trajectory.json</code></p>
+
+<div class="win">
+<strong>這一課的收穫：</strong>讀完後你能列出這份 agent <strong>已有的四道保險</strong>和<strong>缺的三道</strong>，各自指到程式碼的哪一行；並且能打開 <code>trajectory.json</code>，把一次任務從頭回放一遍。
+</div>
+
+<h2>為什麼 agent 需要保險</h2>
+<p>前五課講的是 agent 怎麼「做對」；這一課講它怎麼「做壞」。一個會自己呼叫工具的迴圈，失控的方式很固定：<strong>跑不停</strong>（一直叫工具不給答案）、<strong>卡住</strong>（某個工具永遠不回來）、<strong>模型講錯話</strong>（回了格式不對的東西）、<strong>外部炸掉</strong>（API 錯誤、網路斷線）。Anthropic 的建議很樸素：給 agent 明確的停止條件（stopping conditions），並在每一步都拿「ground truth」——工具的真實結果——來校正，而不是讓模型一路自說自話 <a href="https://www.anthropic.com/engineering/building-effective-agents">[1]</a>。下面逐一對到程式碼。</p>
+
+<h2>A · 已有的四道保險</h2>
+<p>在 VSCode 用 <kbd>⌘F</kbd> 搜 <code>def execute_task</code>（約第 794 行），四道保險有三道在這個函式裡。</p>
+
+<table>
+<tr><th>防什麼</th><th>程式碼在哪</th><th>怎麼防</th></tr>
+<tr><td>跑不停</td><td><code>execute_task</code> 的 <code>while iteration &lt; max_iterations</code>（約 816 行，預設 20）；以及同函式的空回覆分支（約 860 行）</td><td>模型一直叫工具不給答案，最多 20 輪就出去。另一種「跑不停」是模型回了<strong>空字串又沒 tool_calls</strong>：舊版會把它再送回去燒完剩下的輪數，現在直接 <code>logger.warning(...)</code> 後 <code>break</code>。</td></tr>
+<tr><td>卡住</td><td><code>_tool_execute_command</code> 裡 <code>subprocess.run(..., shell=True, timeout=30)</code>（約 723–729 行）</td><td>指令 30 秒沒回來就丟 <code>subprocess.TimeoutExpired</code>，函式把它改包成 <code>TimeoutError</code> 往上丟；<code>_execute_tool</code> 接住、變成 error 字串回給模型，而不是整個程式掛掉。</td></tr>
+<tr><td>模型講錯話</td><td><code>execute_task</code> 裡的 <code>except json.JSONDecodeError</code>（約 876–895 行）</td><td>模型給的 tool arguments 不是合法 JSON 時，不 crash：記一筆 <code>ToolCall(arguments={}, error=...)</code>，再 append 一條 <code>role: "tool"</code> 的錯誤訊息回歷史，<code>continue</code> 讓模型自己改。</td></tr>
+<tr><td>外部炸掉</td><td><code>execute_task</code> 最外層的 <code>except Exception as e</code>（約 963 行）；<code>__main__</code> 的 <code>run()</code>（約 1015 行）</td><td>API 呼叫失敗、模型名不存在、網路斷線…都走這裡：先 <code>_save_trajectory(iteration)</code>，再回傳 <code>{"error": str(e), "final_answer": None, "success": False, ...}</code>。<code>run()</code> 看到 <code>result.get("error")</code> 就印 <code>=== ERROR ===</code>。</td></tr>
+</table>
+
+<p>注意第二、三道的共同精神：<strong>工具層的失敗變成「給模型看的訊息」</strong>，迴圈不斷。模型看到 <code>TimeoutError</code> 或 <code>Invalid tool arguments</code> 之後，通常會換個做法再試。這就是 [1] 說的「用 ground truth 校正」——錯誤本身也是 ground truth。</p>
+
+<p>正常結束則走 <code>execute_task</code> 最後的 return（約 979 行）：<code>"success": final_answer is not None</code>，所以 20 輪跑完還沒答案時，<code>success</code> 會是 <code>False</code> 但沒有 <code>error</code>。</p>
+
+<h2>B · 缺的三道保險</h2>
+<p>這份 agent 是教學用的，有三件生產環境一定會做的事它沒做。這裡只點出證據，不實作（MISSION 說好的）。</p>
+
+<table>
+<tr><th>缺什麼</th><th>證據</th><th>為什麼要在意</th></tr>
+<tr><td>工具結果不截斷</td><td><code>execute_task</code> 裡 <code>tool_content = json.dumps(result)</code>（約 934 行）整包 append 進歷史。對照 <code>01_loop.py</code> 最後一行有 <code>result[:4000]</code>。</td><td>模型 <code>read_file</code> 一個 5 MB 的檔，整份進 context，之後每一輪都要重送。Anthropic 的 context engineering 文章把「工具結果要省 token」列為第一件事 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">[2]</a>。</td></tr>
+<tr><td>沒有 sandbox</td><td><code>_tool_execute_command</code> 的 <code>shell=True</code>（約 725 行）；<code>_tool_code_interpreter</code> 的 <code>exec(code, exec_ns)</code>（約 677 行）。docstring 寫 "restricted environment"，但 <code>exec_ns = {}</code> 只是乾淨的命名空間，<code>import os; os.system(...)</code> 照跑。</td><td>模型想到什麼就執行什麼，權限等於你自己。<strong>不要拿它跑來路不明的任務</strong>；讀書會示範時在一個可以丟掉的目錄裡跑。</td></tr>
+<tr><td>不追蹤 token / 費用</td><td>全檔搜 <code>response.usage</code> 或 <code>.usage</code>：零筆。模型回應裡的 token 數從來沒被讀過。</td><td>跑不停的保險只擋「輪數」，不擋「每輪多貴」。20 輪 × 越來越長的歷史，帳單是二次方成長的。</td></tr>
+</table>
+
+<h2>C · 觀測：它怎麼記錄自己做過什麼</h2>
+
+<h3>每一次工具呼叫一筆 <code>ToolCall</code></h3>
+<p><kbd>⌘F</kbd> 搜 <code>class ToolCall</code>（約第 72 行）。一個 pydantic 模型，欄位是 <code>tool_name</code>、<code>arguments</code>、<code>result</code> / <code>error</code>（二擇一）、<code>call_number</code>（第幾次叫同一個工具）、<code>timestamp</code>、<code>duration_ms</code>。在 <code>execute_task</code> 裡每執行完一個工具就 <code>self.tool_calls.append(ToolCall(...))</code>（約 920 行）；JSON 壞掉那條分支也會記一筆，只是 <code>arguments={}</code>。</p>
+
+<h3><code>_save_trajectory</code>：每一輪 dump 一次</h3>
+<p>搜 <code>def _save_trajectory</code>（約第 216 行）。它在 <code>execute_task</code> 被叫的時機：<strong>每輪開頭</strong>、<strong>結束時</strong>（找到答案，或 20 輪用完走到迴圈後面的 return）、<strong>出錯時</strong>（最外層 except）。每次都用 <code>'w'</code> 模式<strong>覆寫</strong> <code>trajectory.json</code>，所以檔案永遠是「最新狀態」，不是歷史累積。重要的 key：</p>
+
+<table>
+<tr><th>key</th><th>內容</th></tr>
+<tr><td><code>conversation_history</code></td><td>第 3 課的那個 list：system prompt、user、assistant（含 tool_calls）、tool 結果。</td></tr>
+<tr><td><code>last_llm_messages</code></td><td>最後一輪<strong>真正送給模型</strong>的 messages。跟上面一項的差別就是第 4 課的 system hint——那條臨時加在末尾、沒存進歷史的 <code>role: "user"</code> 狀態摘要。兩個欄位並排比，hint 的「臨時加上、不存檔」一眼就看出來。</td></tr>
+<tr><td><code>tool_calls</code></td><td><code>[call.model_dump() for call in self.tool_calls]</code>，上面那些 <code>ToolCall</code>。</td></tr>
+<tr><td><code>todo_list</code></td><td>第 5 課的 TODO，<code>model_dump(mode="json")</code>。</td></tr>
+<tr><td><code>final_answer</code></td><td>還沒答完時是 <code>null</code>。</td></tr>
+<tr><td><code>config</code></td><td>哪些 hint 開著，方便事後對照「模型當時看到了什麼」。</td></tr>
+</table>
+
+<p>開關在 <code>SystemHintConfig</code>（約第 83 行）：<code>save_trajectory: bool = True</code>、<code>trajectory_file: str = "trajectory.json"</code>。關掉它 <code>_save_trajectory</code> 第一行就 return。</p>
+
+<h3>終端機的 log</h3>
+<p>檔案開頭（約 40–43 行）：<code>logging.basicConfig(level=logging.INFO, format='%(message)s')</code>，所以 log 不帶時間與模組名，乾淨得像 print；接著把 <code>httpx</code> 和 <code>openai</code> 兩個 logger 壓到 WARNING，否則 SDK 每個 HTTP request 都會印一行。跑任務時你看到的 <code>── iteration n/20 ──</code>、<code>🔧 工具名 (call #n)</code>、<code>✅ 結果前 150 字</code>、<code>❌ 錯誤前 150 字</code> 全在 <code>execute_task</code> 裡。</p>
+
+<p>所以觀測有兩層：<strong>log 看現場</strong>（即時、只有摘要），<strong>trajectory.json 看全貌</strong>（事後、一字不漏）。debug 的時候先看 log 找到哪一輪出事，再開 JSON 看那一輪模型到底收到什麼。</p>
+
+<div class="skip">
+<h3>這些可以先跳過</h3>
+<ul>
+<li><code>_reasoning_safe_temperature</code>：某些 reasoning 模型只吃 temperature=1 的相容補丁。</li>
+<li><code>"FINAL ANSWER:" in content</code> 的字串切割（兩處）：舊版的結束訊號；現在「沒有 tool_calls」才是真正的停止條件，這幾行只是向下相容。</li>
+<li><code>_tool_rewrite_todo_list</code> 裡的 <code>kept_items</code> / <code>new_items</code>：第 5 課講過的「完成項保留」，跟保護無關。</li>
+</ul>
+</div>
+
+
+<h2>預測一下</h2>
+<p class="note">選一個答案，立刻看解釋。目的是檢查你能不能從程式碼預測 agent 的行為，不是考試。</p>
+
+<div class="quiz" data-answer="1">
+<p class="q">模型呼叫 <code>execute_command</code>，指令是 <code>sleep 60</code>。接下來會怎樣？</p>
+<button>整個程式直接當掉結束</button>
+<button>三十秒後把錯誤回模型</button>
+<button>等到六十秒跑完再回傳</button>
+<p class="why"><code>subprocess.run(timeout=30)</code> 在 30 秒時丟 <code>TimeoutExpired</code>，<code>_tool_execute_command</code> 改包成 <code>TimeoutError("Command timed out after 30 seconds: sleep 60")</code>；<code>_execute_tool</code> 的 <code>except</code> 接住，變成 <code>{"error": ...}</code> 當工具結果回給模型，迴圈繼續。終端機會印一行 <code>❌</code>。</p>
+</div>
+
+<div class="quiz" data-answer="1">
+<p class="q">模型回了一個 tool call，但 <code>arguments</code> 是 <code>{"command": ls}</code>（字串沒加引號，不是合法 JSON）。接下來會怎樣？</p>
+<button>拋出例外整個任務失敗</button>
+<button>回一條錯誤訊息再繼續</button>
+<button>自動修正引號後再執行</button>
+<p class="why"><code>json.loads(raw_args)</code> 丟 <code>JSONDecodeError</code>，被 <code>execute_task</code> 裡專門的 <code>except</code> 接住：記一筆 <code>ToolCall(arguments={}, error=...)</code>，append 一條 <code>role: "tool"</code> 內容是 <code>{"error": "Invalid tool arguments (not valid JSON): ..."}</code>，然後 <code>continue</code>。下一輪模型看到這條，通常會重發一次正確的 JSON。沒有任何自動修正。</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">你想知道「最後一輪模型到底收到了哪些 messages」（包含那條臨時的 system hint）。該看哪裡？</p>
+<button>軌跡檔裡的最後送出欄位</button>
+<button>軌跡檔裡的對話歷史欄位</button>
+<button>終端機印出的每輪分隔線</button>
+<p class="why">要看 <code>trajectory.json</code> 的 <code>last_llm_messages</code>。它存的是 <code>messages_to_send</code>——歷史的複本加上 hint。<code>conversation_history</code> 沒有那條 hint（第 4 課：臨時加上、不存檔）；終端機的 log 只有摘要，不印 messages。</p>
+</div>
+
+<h2>主要來源</h2>
+<p><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic — Building Effective Agents</a>：停止條件、每一步用環境回饋（ground truth）校正、agent 要能在哪裡暫停讓人檢查。<a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic — Effective Context Engineering for AI Agents</a>：工具結果要省 token、長任務要 compaction——正是這份 agent 缺的第一道保險的理由。</p>
+
+<p class="note">看不懂的地方直接問我（agent）：把 agent.py 的那幾行或 trajectory.json 的某一段貼過來問「這一段在幹麻」即可。</p>
+
+<h2>整份讀完了</h2>
+<p>六課對應六個面向：迴圈、工具、記憶、system hint、規劃、保護與觀測。之後你自己開一個 agent 專案，看到任何一段程式都應該能歸到其中一格。值得留著的只有一頁：<a href="../reference/agent-py-map.html">agent.py 地圖</a>——函式名對面向對課次。行號會漂，用 <code>grep -n "def " agent.py</code> 重抓。</p>
+
+<div class="nav">
+<span><a href="0005-planning.html">← 上一課：規劃</a></span>
+<span><a href="../reference/glossary.html">名詞表</a> · <a href="../reference/agent-py-map.html">回到地圖</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

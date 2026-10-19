@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 5 課：規劃</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+
+<h1>第 5 課 · 規劃：讓模型自己維護 TODO</h1>
+<p class="meta">agent_basic 讀書會 · 約 11 分鐘 · 對照檔案：<code>agent.py</code> 的 <code>TodoItem</code>、<code>_tool_rewrite_todo_list</code>、<code>_tool_update_todo_status</code>、<code>_format_todo_list</code></p>
+
+<div class="win">
+<strong>這一課的收穫：</strong>能描述 TODO 清單的完整生命週期：system prompt 叫模型建 → 模型呼叫 <code>rewrite_todo_list</code> → 存在 <code>self.todo_list</code> → 每輪經由 hint 回到模型眼前 → <code>update_todo_status</code> 改狀態 → <code>reset</code> 清掉。
+</div>
+
+<h2>規劃不是程式寫的，是模型寫的</h2>
+<p>先打破一個直覺：<code>agent.py</code> 裡<strong>沒有任何一行程式會「規劃」</strong>。沒有任務拆解演算法、沒有依賴圖、沒有排程器。程式做的事只有兩件：</p>
+<ol>
+<li>給模型一個<strong>可以寫計畫的地方</strong>（兩個工具 + 一個 list）。</li>
+<li>每一輪把計畫<strong>再拿給模型看一次</strong>（system hint）。</li>
+</ol>
+<p>Anthropic 的 context engineering 文章把這叫 <em>structured note-taking</em>：agent 把進度寫到 context 之外的地方（檔案、清單），之後再拉回 context，就算對話很長也不會忘記自己做到哪 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">[1]</a>。<code>self.todo_list</code> 就是這份筆記；它不在 <code>conversation_history</code> 裡，但每輪都會被「唸」給模型聽。</p>
+
+<h2>規則：寫在 system prompt 裡</h2>
+<p><kbd>⌘F</kbd> 搜 <code>TODO List Management Rules</code>（在 <code>_init_system_prompt</code>，約第 147 行）。模型怎麼用 TODO 完全由這幾句話決定：</p>
+<ul>
+<li>任務有 <strong>3 個以上步驟</strong> → 立刻用 <code>rewrite_todo_list</code> 建清單。</li>
+<li>開始做某項 → 用 <code>update_todo_status</code> 改成 <code>in_progress</code>；<strong>同時只能有一項</strong> in_progress。</li>
+<li>做完<strong>馬上</strong>標 <code>completed</code>。</li>
+<li>遇到錯誤或換方法 → 把相關項目標 <code>cancelled</code>，再加新的。</li>
+</ul>
+<p class="note">這些是「建議」，不是程式強制的。程式沒有檢查「只能一項 in_progress」，模型若不守規矩也不會報錯。改這段文字，模型的規劃行為就跟著改。</p>
+
+<h2>資料：TodoStatus 與 TodoItem</h2>
+<p>搜 <code>class TodoStatus</code>（約第 46 行）。四個狀態是一個 <code>Enum</code>：<code>pending</code>、<code>in_progress</code>、<code>completed</code>、<code>cancelled</code>。接著 <code>class TodoItem(BaseModel)</code>：</p>
+
+<pre><code>class TodoItem(BaseModel):
+    id: int
+    content: str
+    status: TodoStatus = TodoStatus.PENDING
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: Optional[str] = None
+
+    @field_validator("content")
+    @classmethod
+    def content_must_be_meaningful(cls, v: str) -> str:
+<span class="hl">        v = v.strip()                                   # 模型偶爾送 "" 或 "   "</span>
+<span class="hl">        if not v:</span>
+<span class="hl">            raise ValueError("todo content must not be empty")</span>
+        return v</code></pre>
+
+<p>標起來的 validator 值得停一下。模型送來的字串是<strong>跨信任邊界</strong>的輸入：它可能是空白、可能是純空格。pydantic 在建構 <code>TodoItem</code> 時跑這個函式，不合格就丟 <code>ValueError</code>。這個例外一路往上，被 <code>_execute_tool</code> 的 <code>except Exception</code> 接住，包成 <code>{"error": ...}</code> 當工具結果<strong>回給模型</strong>（第 4 課的詳細錯誤）。模型下一輪會看到「todo content must not be empty」，自己改正。這是「在跟模型的邊界做驗證，錯誤交給模型處理」的最小範例 <a href="https://docs.pydantic.dev/latest/concepts/models/">[2]</a>。</p>
+
+<h2>兩個工具：契約與實作</h2>
+<p>跟第 2 課一樣，契約在 <code>_get_tools_description</code>（搜 <code>"name": "rewrite_todo_list"</code>，約第 386 行），實作在 <code>_tool_rewrite_todo_list</code> 與 <code>_tool_update_todo_status</code>（約第 745、773 行），由 <code>_execute_tool</code> 用名字 dispatch。</p>
+
+<h3>rewrite_todo_list(items: List[str])</h3>
+<pre><code>def _tool_rewrite_todo_list(self, items: List[str]) -> Dict[str, Any]:
+<span class="hl">    kept_items = [item for item in self.todo_list
+                  if item.status in [TodoStatus.COMPLETED, TodoStatus.CANCELLED]]</span>
+    new_items = []
+    for content in items:
+        new_items.append(TodoItem(id=self.next_todo_id, content=content,
+                                  status=TodoStatus.PENDING))
+<span class="hl">        self.next_todo_id += 1                          # id 只增不減，不會重用</span>
+<span class="hl">    self.todo_list = kept_items + new_items</span>
+    return {"success": True, "kept_items": len(kept_items),
+            "new_items": len(new_items), "total_items": len(self.todo_list)}</code></pre>
+<p>名字叫 rewrite，但<strong>不是整份覆蓋</strong>：已完成、已取消的留著（當作歷史紀錄），只有 pending / in_progress 會被新的取代。所以模型「換方法」時，重寫一次就等於丟掉舊計畫、保留戰績。</p>
+
+<h3>update_todo_status(updates: List[{id, status}])</h3>
+<p>吃一個 list，每個元素是 <code>{"id": 2, "status": "completed"}</code>。實作就是對 <code>self.todo_list</code> 線性找 id、改 <code>status</code>、填 <code>updated_at</code>。找不到的 id 會被靜靜跳過，回傳的 <code>updated_items</code> 會比較少。契約那邊用 JSON Schema 的 <code>enum</code> 限制 status 只能是四個字串之一；實作用 <code>TodoStatus(update["status"])</code> 再轉一次，字串不合法會丟 <code>ValueError</code>，同樣回給模型。</p>
+
+<h2>清單怎麼回到模型眼前</h2>
+<p>這是整課最重要的一條線，三個函式接力：</p>
+<table>
+<tr><th>函式</th><th>做什麼</th></tr>
+<tr><td><code>_format_todo_list</code>（約第 252 行）</td><td>把 <code>self.todo_list</code> 轉成文字，每項 <code>[id] emoji content (status)</code></td></tr>
+<tr><td><code>_get_system_hint</code>（約第 270 行）</td><td>若 <code>enable_todo_list</code> 且清單非空，加一段 <code>=== CURRENT TASKS ===</code> 在系統狀態後面</td></tr>
+<tr><td><code>execute_task</code> 內 <code>messages_to_send</code>（約第 828 行）</td><td>第 4 課的機制：hint 接在歷史<strong>複本</strong>末尾當一條 <code>role: user</code>，<strong>不存進歷史</strong></td></tr>
+</table>
+
+<p>模型在每一輪的最後一條訊息會看到類似這樣的東西：</p>
+<pre><code>=== SYSTEM STATE ===
+Current Time: 2026-10-19 14:02:11
+Current Directory: /Users/adamw/tutorials/llm_tutorial/agent_basic
+...
+
+=== CURRENT TASKS ===
+TODO List:
+  [1] ✅ 建立 notes/ 資料夾 (completed)
+  [2] 🔄 在 notes/ 寫入 hello.txt (in_progress)
+  [3] ⏳ 列出 notes/ 內容 (pending)</code></pre>
+
+<p>關鍵：模型<strong>不是靠記憶</strong>知道做到第幾項。就算歷史裡有二十輪前它呼叫 <code>update_todo_status</code> 的紀錄，真正讓它每輪都「看到當前狀態」的是這段每次重新產生的 hint。清單是程式的狀態（<code>self.todo_list</code>），文字只是每輪的投影。</p>
+
+<p class="note">一行補充：<code>_save_trajectory</code> 用 <code>item.model_dump(mode="json")</code> 輸出 TODO。<code>mode="json"</code> 讓 <code>TodoStatus.COMPLETED</code> 變成字串 <code>"completed"</code>，否則 Enum 物件進 <code>json.dump</code> 會出錯 <a href="https://docs.pydantic.dev/latest/concepts/models/">[2]</a>。</p>
+
+<h2>最後一站：reset</h2>
+<p>搜 <code>def reset</code>（約第 995 行）：<code>self.todo_list = []</code>、<code>self.next_todo_id = 1</code>。REPL 模式打 <code>reset</code> 才會清；單純跑完一個 <code>execute_task</code> <strong>不會</strong>清，所以同一個 agent 連續接兩個任務，第二個任務會看到上一個任務的 completed 項目還在 hint 裡。</p>
+
+<div class="skip">
+<h3>這些可以先跳過</h3>
+<ul>
+<li><code>created_at</code> / <code>updated_at</code>：時間戳只進 trajectory.json，模型看不到。</li>
+<li><code>execute_task</code> 回傳 dict 裡手寫的 todo 轉換（約第 982 行）：跟 <code>model_dump(mode="json")</code> 等價。</li>
+<li><code>_format_todo_list</code> 裡的 emoji 對照表：純顯示。</li>
+</ul>
+</div>
+
+
+<h2>預測一下</h2>
+<p class="note">選一個答案，立刻看解釋。目的是檢查你有沒有把生命週期讀進去，不是考試。</p>
+
+<div class="quiz" data-answer="1">
+<p class="q">清單目前有三項：[1] completed、[2] pending、[3] pending。模型呼叫 <code>rewrite_todo_list</code> 送來兩個新字串。呼叫後清單有幾項？</p>
+<button>共兩項</button>
+<button>共三項</button>
+<button>共五項</button>
+<p class="why">completed / cancelled 的保留（[1]），pending / in_progress 的全部丟掉（[2][3]），再加兩個新的 [4][5]。結果 1 + 2 = 3 項。注意 id 從 <code>next_todo_id</code> 接著編，不會回收 2 和 3。</p>
+</div>
+
+<div class="quiz" data-answer="1">
+<p class="q">模型呼叫 <code>rewrite_todo_list</code>，其中一個 item 是空字串 <code>""</code>。接下來會怎樣？</p>
+<button>存成空白項目</button>
+<button>回錯誤給模型</button>
+<button>程式直接當掉</button>
+<p class="why"><code>TodoItem(content="")</code> 觸發 <code>content_must_be_meaningful</code>，丟 <code>ValueError</code>。<code>_execute_tool</code> 的 <code>except Exception</code> 接住，包成 <code>{"error": ...}</code> 當工具結果回給模型。因為例外發生在 <code>self.todo_list = kept_items + new_items</code> 之前，清單保持原樣（只有 <code>next_todo_id</code> 可能已為前面合法的項目先加過）。</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">第 12 輪時，模型怎麼知道 [2] 現在是 in_progress？</p>
+<button>每輪重新附上</button>
+<button>它自己記得住</button>
+<button>存進歷史訊息</button>
+<p class="why"><code>_get_system_hint</code> 每一輪重新讀 <code>self.todo_list</code> 產生 <code>=== CURRENT TASKS ===</code>，接在歷史複本末尾送出。歷史裡只有它「呼叫過 update_todo_status」的紀錄和工具回傳的 <code>updated_items</code> 數字，沒有完整清單；hint 本身也不存進歷史（第 4 課）。</p>
+</div>
+
+<h2>主要來源</h2>
+<p>讀 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic — Effective Context Engineering for AI Agents</a> 的 structured note-taking 一節，TODO 清單是它最小的實例。<code>field_validator</code>、<code>Field(default_factory)</code>、<code>model_dump(mode="json")</code> 的語法查 <a href="https://docs.pydantic.dev/latest/concepts/models/">pydantic — Models</a>。</p>
+
+<p class="note">看不懂的地方直接問我（agent）：把 agent.py 的那幾行貼過來問「這一段在幹麻」即可。</p>
+
+<div class="nav">
+<span><a href="0004-system-hints.html">← 上一課：System hint</a> · <a href="../reference/agent-py-map.html">agent.py 地圖</a> · <a href="../reference/glossary.html">詞彙表</a></span>
+<span><a href="0006-guardrails-and-trajectory.html">下一課：保護措施與 trajectory →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

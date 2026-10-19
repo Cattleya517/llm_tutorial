@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent.py 地圖</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+<h1>agent.py 地圖</h1>
+<p class="meta">哪個函式屬於哪個面向、哪一課講。行號以 2026-10-19 的檔案為準，會漂；用函式名搜尋。</p>
+
+<table>
+<tr><th>面向</th><th>函式 / 區塊</th><th>約行</th><th>一句話</th><th>課</th></tr>
+<tr><td>迴圈</td><td><code>execute_task</code></td><td>794</td><td>問模型 → 有無 tool_calls → 執行 → 塞回歷史，上限 <code>max_iterations</code></td><td><a href="../lessons/0001-the-loop.html">1</a></td></tr>
+<tr><td>工具契約</td><td><code>_get_tools_description</code></td><td>291</td><td>六個工具的 JSON Schema，模型唯一看得到的描述</td><td><a href="../lessons/0002-tools.html">2</a></td></tr>
+<tr><td>工具實作</td><td><code>_execute_tool</code></td><td>439</td><td>依名字 dispatch 到 <code>_tool_*</code>，回 (result, error, ms)</td><td><a href="../lessons/0002-tools.html">2</a></td></tr>
+<tr><td>工具實作</td><td><code>_tool_read_file</code> / <code>_tool_write_file</code> / <code>_tool_code_interpreter</code> / <code>_tool_execute_command</code></td><td>525–745</td><td>真正動手的四個；<code>execute_command</code> 會攔純 <code>cd</code> 來維護 <code>current_directory</code></td><td><a href="../lessons/0002-tools.html">2</a></td></tr>
+<tr><td>記憶</td><td><code>_init_system_prompt</code></td><td>141</td><td>歷史的第 0 條：規則 + TODO 用法 + 結束訊號</td><td><a href="../lessons/0003-memory.html">3</a></td></tr>
+<tr><td>記憶</td><td><code>conversation_history</code>（屬性）</td><td>129</td><td>agent 的記憶就是這個 list；跨任務不清空</td><td><a href="../lessons/0003-memory.html">3</a></td></tr>
+<tr><td>記憶</td><td><code>reset</code></td><td>995</td><td>清掉歷史、TODO、計數</td><td><a href="../lessons/0003-memory.html">3</a></td></tr>
+<tr><td>System hint</td><td><code>_get_system_hint</code></td><td>270</td><td>每輪臨時接在歷史複本末尾的 <code>role: user</code> 狀態摘要</td><td><a href="../lessons/0004-system-hints.html">4</a></td></tr>
+<tr><td>System hint</td><td><code>_get_system_state</code></td><td>180</td><td>時間、cwd、OS、Python 版本</td><td><a href="../lessons/0004-system-hints.html">4</a></td></tr>
+<tr><td>System hint</td><td><code>_get_timestamp</code> / 工具結果前的 <code>[Tool call #n]</code></td><td>204 / 執行迴圈內</td><td>時間戳與呼叫計數，讓模型察覺自己在鬼打牆</td><td><a href="../lessons/0004-system-hints.html">4</a></td></tr>
+<tr><td>System hint</td><td><code>_get_detailed_error</code> / <code>_get_error_suggestions</code></td><td>479 / 498</td><td>把 exception 翻成「怎麼修」的提示回給模型</td><td><a href="../lessons/0004-system-hints.html">4</a></td></tr>
+<tr><td>規劃</td><td><code>_tool_rewrite_todo_list</code> / <code>_tool_update_todo_status</code></td><td>745 / 773</td><td>模型自己維護的 TODO；完成項保留、待辦項重寫</td><td><a href="../lessons/0005-planning.html">5</a></td></tr>
+<tr><td>規劃</td><td><code>TodoItem</code> / <code>TodoStatus</code> / <code>_format_todo_list</code></td><td>46–70 / 252</td><td>pydantic 模型 + 顯示</td><td><a href="../lessons/0005-planning.html">5</a></td></tr>
+<tr><td>保護 / 觀測</td><td><code>_save_trajectory</code></td><td>216</td><td>每輪把歷史、工具紀錄、TODO dump 到 <code>trajectory.json</code></td><td><a href="../lessons/0006-guardrails-and-trajectory.html">6</a></td></tr>
+<tr><td>保護 / 觀測</td><td><code>ToolCall</code> / <code>SystemHintConfig</code></td><td>72 / 83</td><td>紀錄每次呼叫；開關各種 hint</td><td><a href="../lessons/0006-guardrails-and-trajectory.html">6</a></td></tr>
+<tr><td>入口</td><td><code>__main__</code></td><td>1008</td><td>單次任務或 REPL（<code>reset</code> / <code>quit</code>）</td><td><a href="../lessons/0003-memory.html">3</a></td></tr>
+</table>
+
+<h2>可以整段略過的</h2>
+<ul>
+<li><code>_reasoning_safe_temperature</code>、<code>_advance_simulated_time</code>、<code>simulated_time</code>：相容性補丁與 demo 假時鐘。</li>
+<li><code>codecs</code>、<code>traceback</code> 等 import：只有錯誤格式化用到。</li>
+<li><code>execute_task</code> 回傳 dict 裡手寫的 todo 轉換：跟 <code>model_dump</code> 等價，留著對照。</li>
+</ul>
+
+<p><a href="glossary.html">名詞表</a></p>
+<p class="note">重新取行號：<code>grep -n "def " agent_basic/agent.py</code></p>
+</main>
+</body>
+</html>

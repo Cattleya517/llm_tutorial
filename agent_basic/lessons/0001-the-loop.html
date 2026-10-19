@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 課：迴圈</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+
+<h1>第 1 課 · 一個 agent 的心臟：迴圈</h1>
+<p class="meta">agent_basic 讀書會 · 約 12 分鐘 · 對照檔案：<code>01_loop.py</code>（60 行）→ <code>agent.py</code> 的 <code>execute_task</code></p>
+
+<div class="win">
+<strong>這一課的收穫：</strong>讀完後打開 <code>agent.py</code> 的 <code>execute_task</code>，你能用手指出「問模型 → 有沒有 tool_calls → 執行工具 → 塞回歷史」四個區塊，其他 900 行都只是這四塊的裝飾。
+</div>
+
+<h2>先把定義縮到一句話</h2>
+<p>Anthropic 對 agent 的定義是「<em>LLMs using tools based on environmental feedback in a loop</em>」<a href="https://www.anthropic.com/engineering/building-effective-agents">[1]</a>。拆開來就是三個名詞：<strong>模型</strong>、<strong>工具</strong>、<strong>迴圈</strong>。模型不會自己執行任何東西，它只會「說」要用哪個工具；真正動手的是你的 Python 程式，然後把結果餵回去，再問一次。</p>
+
+<h2>最小版本：01_loop.py 的四個區塊</h2>
+<p>先在 VSCode 打開 <code>agent_basic/01_loop.py</code>。建議<strong>從最底下的迴圈往上讀</strong>。</p>
+
+<h3>區塊 4 · 迴圈（先看這裡；節錄，print 行省略）</h3>
+<pre><code>for step in range(10):                          <span class="cm"># 上限：避免模型卡住一直叫工具</span>
+    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=TOOLS)
+    msg = resp.choices[0].message
+<span class="hl">    messages.append(msg)                        # 模型說的話也是歷史的一部分（含它的 tool_calls）</span>
+
+<span class="hl">    if not msg.tool_calls:                      # 沒有要用工具 = 它認為答完了</span>
+        print(msg.content)
+        break
+
+    for call in msg.tool_calls:                 <span class="cm"># 一輪可能同時要求多個工具</span>
+        args = json.loads(call.function.arguments)
+        result = run_tool(call.function.name, args)
+<span class="hl">        messages.append({"role": "tool", "tool_call_id": call.id, "content": result[:4000]})</span></code></pre>
+
+<p>三行被標起來的就是整個 agent 的規則：</p>
+<ol>
+<li><strong>模型的回覆要先 append</strong>，因為它裡面帶著 <code>tool_calls</code>（它「說」要用什麼工具）。</li>
+<li><strong>沒有 <code>tool_calls</code> 就是結束</strong>。模型用「不叫工具、直接講話」來表示它答完了。</li>
+<li><strong>工具結果用 <code>role: "tool"</code> 送回</strong>，並附 <code>tool_call_id</code> 對上是回答哪一次呼叫。</li>
+</ol>
+<p class="note">這三條不是這份程式自己發明的，是 OpenAI 相容 API 的規格。OpenRouter 文件用一模一樣的流程描述，範例也是上限 10 輪 <a href="https://openrouter.ai/docs/guides/features/tool-calling">[2]</a>。</p>
+
+<h3>區塊 1 · 工具契約（TOOLS）</h3>
+<p>一份 JSON Schema，告訴模型「有個叫 <code>run_shell</code> 的函式，吃一個字串 <code>command</code>」。<strong>模型只看得到這份描述</strong>，看不到你的 Python。</p>
+
+<h3>區塊 2 · 工具實作（run_tool）</h3>
+<p>模型說「我要 <code>run_shell</code>」時真正跑 <code>subprocess</code> 的地方。名字要跟區塊 1 對得上。這兩塊為什麼分開、怎麼對上，是<a href="0002-tools.html">第 2 課</a>。</p>
+
+<h3>區塊 3 · 對話歷史（messages）</h3>
+<p>一個普通的 Python list。每一輪<strong>整份</strong>送給模型。agent 的「記憶」就只是這個 list，<a href="0003-memory.html">第 3 課</a>。</p>
+
+<h2>放大到 agent.py：同樣四塊在哪裡</h2>
+<p>在 VSCode 用 <kbd>⌘P</kbd> 開 <code>agent.py</code>，<kbd>⌘F</kbd> 搜 <code>def execute_task</code>（約第 794 行）。往下讀，你會依序遇到：</p>
+
+<table>
+<tr><th>01_loop.py</th><th>agent.py</th><th>你會看到什麼</th></tr>
+<tr><td><code>messages</code></td><td><code>self.conversation_history</code></td><td>同樣是 list；任務開頭 <code>append({"role": "user", ...})</code></td></tr>
+<tr><td><code>for step in range(10)</code></td><td><code>while iteration &lt; max_iterations</code></td><td>上限 20 而不是 10；每輪印 <code>── iteration n/20 ──</code></td></tr>
+<tr><td><code>client.chat.completions.create(...)</code></td><td>同一行，多了 <code>tool_choice="auto"</code>、<code>temperature</code>、<code>max_tokens</code></td><td>送的是 <code>messages_to_send</code>，是歷史的<strong>複本</strong>加一條 hint（第 4 課）</td></tr>
+<tr><td><code>if not msg.tool_calls: break</code></td><td><code>if not has_tool_calls:</code> … <code>break</code></td><td>多了 <code>FINAL ANSWER:</code> 字串的切割，可先忽略</td></tr>
+<tr><td><code>for call in msg.tool_calls</code></td><td><code>for tool_call in message.tool_calls:</code></td><td>多了 JSON 解析失敗的處理、計數、log、計時</td></tr>
+<tr><td><code>run_tool(name, args)</code></td><td><code>self._execute_tool(function_name, function_args)</code></td><td>第 2 課</td></tr>
+<tr><td><code>messages.append({"role": "tool", ...})</code></td><td><code>self.conversation_history.append({"role": "tool", ...})</code></td><td>content 前面多貼了 <code>[時間] [Tool call #n]</code>（第 4 課）</td></tr>
+<tr><td><code>result[:4000]</code></td><td><em>沒有對應</em></td><td>agent.py 沒截斷工具結果，這是它缺的保護（第 6 課）</td></tr>
+</table>
+
+<p>所以 <code>execute_task</code> 約 200 行，骨架跟 60 行的最小版一樣。多出來的每一段都屬於後面某一課。</p>
+
+<div class="skip">
+<h3>這些可以先跳過</h3>
+<ul>
+<li><code>_advance_simulated_time</code>、<code>simulate_time_delay</code>：書裡 demo「多天任務」用的假時鐘。</li>
+<li><code>_reasoning_safe_temperature</code>：某些 reasoning 模型只接受 temperature=1 的小補丁。</li>
+<li><code>"FINAL ANSWER:" in content</code> 那幾行：舊版用字串當結束訊號，現在「沒有 tool_calls」才是真正的結束條件。</li>
+<li><code>_save_trajectory(iteration)</code>：每輪把狀態 dump 成 JSON，第 6 課再看。</li>
+</ul>
+</div>
+
+
+<h2>預測一下</h2>
+<p class="note">選一個答案，立刻看解釋。目的是檢查你有沒有把上面三條規則讀進去，不是考試。</p>
+
+<div class="quiz" data-answer="1">
+<p class="q">模型回傳的訊息裡沒有 <code>tool_calls</code>，迴圈接下來會怎樣？</p>
+<button>再問模型一次</button>
+<button>結束並印答案</button>
+<button>執行預設工具</button>
+<p class="why">「不叫工具」就是模型表示答完了。這是 01_loop.py 的 <code>if not msg.tool_calls: break</code>，也是 agent.py 的 <code>if not has_tool_calls:</code> 分支。</p>
+</div>
+
+<div class="quiz" data-answer="1">
+<p class="q">如果忘了 append 模型那條帶 <code>tool_calls</code> 的訊息，只 append 了 <code>role: "tool"</code> 的結果，下一輪會怎樣？</p>
+<button>模型照常繼續</button>
+<button>請求會被拒絕</button>
+<button>工具不會執行</button>
+<p class="why">API 要求每條 <code>role: "tool"</code> 必須接在一條帶 <code>tool_calls</code> 的 assistant 訊息後面，<code>tool_call_id</code> 要對得上。少了前一條，伺服器會拒絕整個請求。這就是為什麼 <code>messages.append(msg)</code> 要在執行工具之前。</p>
+</div>
+
+<div class="quiz" data-answer="2">
+<p class="q"><code>for step in range(10)</code>（agent.py 的 <code>max_iterations=20</code>）主要防的是什麼？</p>
+<button>模型回答太長</button>
+<button>工具跑太久了</button>
+<button>工具無限循環</button>
+<p class="why">模型可能一直叫工具永遠不給答案（例如每次都 <code>ls</code>）。上限是最便宜的保險；工具跑太久由 <code>subprocess.run(timeout=30)</code> 另外防。</p>
+</div>
+
+<h2>主要來源</h2>
+<p>讀 <a href="https://openrouter.ai/docs/guides/features/tool-calling">OpenRouter — Tool &amp; Function Calling</a>，它的「agentic loop」範例跟 01_loop.py 一行一行對得上。想看 agent/workflow 的分野再讀 <a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic — Building Effective Agents</a>。</p>
+
+<p class="note">看不懂的地方直接問我（agent）：把 agent.py 的那幾行貼過來問「這一段在幹麻」即可。</p>
+
+<div class="nav">
+<span><a href="../reference/agent-py-map.html">參考：agent.py 地圖</a> · <a href="../reference/glossary.html">名詞表</a></span>
+<span><a href="0002-tools.html">下一課：工具契約與實作 →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

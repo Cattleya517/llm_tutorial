@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 4 課：System hint</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+
+<h1>第 4 課 · System hint：每一輪臨時貼上的狀態欄</h1>
+<p class="meta">agent_basic 讀書會 · 約 12 分鐘 · 對照函式：<code>SystemHintConfig</code>、<code>_get_system_hint</code>、<code>_get_system_state</code>、<code>_get_timestamp</code>、<code>_get_detailed_error</code>，以及 <code>execute_task</code> 裡的 <code>messages_to_send</code>、<code>tool_call_counts</code>、<code>metadata_parts</code></p>
+
+<div class="win">
+<strong>這一課的收穫：</strong>讀完後你能說出四種 hint 各自「貼在哪裡」——時間戳貼在 <strong>user 訊息前綴</strong>、系統狀態貼在<strong>歷史複本末尾</strong>、工具計數貼在 <strong>tool 結果前綴</strong>、詳細錯誤貼在 <strong>tool 結果內容</strong>——並且解釋為什麼狀態欄只貼在複本上、不存進歷史。
+</div>
+
+<h2>動機：長任務裡模型會忘記「現在幾點、做到哪」</h2>
+<p>第 3 課說過，模型每一輪看到的世界就是 <code>conversation_history</code>。任務一長，這份歷史裡堆滿了工具輸出，模型很容易搞不清楚現在幾點、自己在哪個目錄、同一個指令已經重跑了幾次。原書 README 把解法叫做「<strong>Agent 狀態欄</strong>」（system hint）：由<strong>程式</strong>根據真實執行狀態生成一段短摘要，在送給模型<strong>之前</strong>，用一條 <code>role: "user"</code> 訊息接在 context 末尾<a href="https://github.com/bojieli/ai-agent-book/tree/main/chapter2/system-hint">[1]</a>。</p>
+<p>關鍵是「程式生成」這四個字。模型自己寫的計畫可能是錯的、過時的；狀態欄是從 <code>os.getcwd()</code>、<code>datetime.now()</code>、計數器直接讀出來的事實。它適合提醒時間、進度、約束，但不能取代工具結果。</p>
+
+<h2>四種 hint，四個貼的位置</h2>
+<p>agent.py 的「hint」其實不是一個東西，是四個小機制，貼在訊息的不同位置。這是本課最重要的一張表：</p>
+
+<table>
+<tr><th>Hint</th><th>產生它的函式</th><th>貼在哪裡</th><th>存進歷史？</th></tr>
+<tr><td>時間戳</td><td><code>_get_timestamp</code>（約 204 行）</td><td><code>[2026-10-19 14:03:11] </code> 前綴：貼在 <strong>user 任務</strong>前面（<code>execute_task</code> 開頭，約 807 行），也貼在每條 <strong>tool 結果</strong>前面（約 940 行）。系統狀態的 <code>Current Time:</code> 也用它</td><td>是</td></tr>
+<tr><td>系統狀態</td><td><code>_get_system_state</code>（約 180 行）→ <code>_get_system_hint</code>（約 270 行）</td><td>一條新的 <code>role: "user"</code> 訊息，接在<strong>歷史複本的末尾</strong>（約 828–831 行）。內容：現在時間、cwd、OS、shell、Python 版本</td><td><strong>否</strong></td></tr>
+<tr><td>工具計數</td><td><code>tool_call_counts</code> 字典（約 897 行）</td><td><code>[Tool call #3 for 'read_file']</code>：和時間戳一起拼成 <code>metadata_parts</code>，貼在 <strong>tool 結果前綴</strong>（約 937–946 行）</td><td>是</td></tr>
+<tr><td>詳細錯誤</td><td><code>_get_detailed_error</code> / <code>_get_error_suggestions</code>（約 479 / 498 行）</td><td>exception 翻成「類型 + 訊息 + 參數 + 建議」，當作 <code>{"error": ...}</code> 放進 <strong>tool 結果內容</strong></td><td>是</td></tr>
+</table>
+
+<h3>時間戳與工具計數：為什麼要「存」</h3>
+<p>這兩個是<strong>事件發生當下</strong>的事實：「這條結果是幾點拿到的」「這是第幾次叫這個工具」。它們是工具結果的一部分，存進歷史才合理——模型下一輪往回看時，才能看出「我剛剛已經 <code>ls</code> 了四次」。system prompt（<code>_init_system_prompt</code>）明講：<em>Notice tool call numbers … if you see high numbers, change strategy</em>。注意 <code>tool_call_counts</code> 只在 <code>reset()</code> 歸零，REPL 模式下跨任務累計。</p>
+
+<h3>詳細錯誤：把 exception 翻譯給模型</h3>
+<p>在 <code>_execute_tool</code> 的 <code>except</code> 分支，exception 不會直接丟出去，而是交給 <code>_get_detailed_error</code>：組出 <code>Tool 'read_file' failed with FileNotFoundError: …</code>、呼叫參數、（verbose 時）traceback，再由 <code>_get_error_suggestions</code> 依錯誤類型附上建議，例如 <em>Verify the file/directory path exists | Check the current working directory</em>。整段字串塞進 <code>{"error": …}</code>，走跟正常結果一模一樣的路回到模型手上。模型看到的是「怎麼修」，不只是「壞了」。</p>
+
+<h2>關鍵機制：複本上貼，歷史不留</h2>
+<p>在 VSCode <kbd>⌘F</kbd> 搜 <code>messages_to_send</code>。<code>execute_task</code> 的 while 迴圈裡，每一輪問模型之前只有這五行：</p>
+
+<pre><code><span class="hl">messages_to_send = self.conversation_history.copy()   # 1. 淺複本</span>
+system_hint = self._get_system_hint()                  <span class="cm"># 2. 現在的狀態欄（可能是 None）</span>
+if system_hint:
+<span class="hl">    messages_to_send.append({"role": "user", "content": system_hint})   # 3. 只接在複本上</span>
+self.last_llm_messages = messages_to_send              <span class="cm"># 4. 留一份給 trajectory.json</span>
+
+response = self.client.chat.completions.create(model=self.model, messages=messages_to_send, ...)</code></pre>
+
+<p>所以狀態欄<strong>每一輪都送</strong>（模型永遠看得到），但<strong>從不 append 到 <code>self.conversation_history</code></strong>。下一輪再重新 <code>.copy()</code>、重新生成、重新接上。三個理由：</p>
+<ol>
+<li><strong>會過期。</strong>cwd 會因為 <code>cd</code> 改變、時間一直走、TODO 狀態一直變。存進歷史的舊狀態欄只會跟新的打架。</li>
+<li><strong>會膨脹。</strong>20 輪就是 20 份一模一樣的「System: Darwin … Python 3.12」，純粹浪費 token。</li>
+<li><strong>它是狀態欄，不是對話。</strong>打個比方：遊戲畫面上的 HUD 每一幀重畫，不會存進劇情；原書就叫它 Agent 狀態欄。</li>
+</ol>
+<p>對照 <code>_get_system_hint</code>（約 270 行）：只有 <code>enable_system_state</code> 和 <code>enable_todo_list</code> 兩個開關決定它回不回 <code>None</code>；內容就是 <code>=== SYSTEM STATE ===</code> 加上（有 TODO 時）<code>=== CURRENT TASKS ===</code>。</p>
+<p class="note">為什麼接在<strong>末尾</strong>、不是改 system prompt？歷史前段不動，provider 的 prompt cache 才打得到；而最新的狀態放在最接近模型「要回答」的位置，最不會被忽略。這跟 Anthropic 講的 context engineering 一致：每一輪送進去的應該是「<em>the smallest set of high-signal tokens</em>」<a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">[2]</a>——狀態欄小、訊號高、不重複。</p>
+
+<h2>SystemHintConfig：每種 hint 一個開關</h2>
+<p>往上翻到 <code>class SystemHintConfig</code>（約 83 行），五個布林值對應五種機制：</p>
+<pre><code>class SystemHintConfig(BaseModel):
+    enable_timestamps: bool = True        <span class="cm"># [time] 前綴</span>
+    enable_tool_counter: bool = True      <span class="cm"># [Tool call #n for 'x']</span>
+    enable_todo_list: bool = True         <span class="cm"># 狀態欄裡的 === CURRENT TASKS ===</span>
+    enable_detailed_errors: bool = True   <span class="cm"># 關掉就只回 str(e)，沒有建議</span>
+    enable_system_state: bool = True      <span class="cm"># 狀態欄裡的 === SYSTEM STATE ===</span></code></pre>
+<p>要做對照實驗，建構時傳一個 config 進去即可：</p>
+<pre><code>agent = SystemHintAgent(config=SystemHintConfig(enable_system_state=False))</code></pre>
+<p>此時若 TODO 清單還是空的，<code>_get_system_hint</code> 回 <code>None</code>，送出模型的那一刻 <code>last_llm_messages</code> 跟 <code>conversation_history</code> 會長得一模一樣（trajectory.json 裡的後者會再多最後一條 assistant 回覆）——這是確認「hint 真的只是臨時貼上」最直接的證據。</p>
+
+<h2>TODO 清單也搭這班車</h2>
+<p>模型用 <code>rewrite_todo_list</code> 建的清單，工具結果只回 <code>{"success": true, "total_items": 3}</code> 這種計數；清單本身是透過 <code>=== CURRENT TASKS ===</code> 每一輪在狀態欄裡重新出現——這正是 Anthropic 文中「structured note-taking」的一種實作，<a href="0005-planning.html">第 5 課</a>細講。</p>
+
+<div class="skip">
+<h3>這些可以先跳過</h3>
+<ul>
+<li><code>simulate_time_delay</code>、<code>simulated_time</code>、<code>_advance_simulated_time</code>：書裡 demo「多天任務」用的假時鐘，預設關閉。</li>
+<li><code>timestamp_format</code>：只是 <code>strftime</code> 格式字串。</li>
+<li><code>_get_system_state</code> 裡的 Windows / Darwin / Linux 分支：只是決定 <code>Shell Environment:</code> 那行怎麼寫。</li>
+<li><code>_get_detailed_error</code> 裡 <code>if self.verbose:</code> 的 traceback：給人看的，模型通常用不到。</li>
+</ul>
+</div>
+
+
+<h2>預測一下</h2>
+<p class="note">選一個答案，立刻看解釋。目的是檢查你有沒有分清楚「貼在複本」與「存進歷史」，不是考試。</p>
+
+<div class="quiz" data-answer="2">
+<p class="q">一個任務跑了 8 輪結束。之後在 <code>agent.conversation_history</code> 裡搜 <code>=== SYSTEM STATE ===</code>，會找到幾條？</p>
+<button>每一輪各存一條</button>
+<button>只存最後的那條</button>
+<button>一條都沒有存進</button>
+<p class="why">狀態欄只 append 到 <code>messages_to_send</code>（<code>conversation_history.copy()</code> 的複本），從不 append 回 <code>self.conversation_history</code>。每一輪都是現做現貼、用完即丟。想看證據，比對 <code>trajectory.json</code> 的 <code>last_llm_messages</code> 與 <code>conversation_history</code>。</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">模型第 5 次呼叫 <code>read_file</code>。它是從哪裡看到「這已經是第 5 次」？</p>
+<button>工具結果的開頭</button>
+<button>狀態欄的末尾處</button>
+<button>系統提示的內容</button>
+<p class="why"><code>tool_call_counts['read_file']</code> 變成 5，<code>metadata_parts</code> 把 <code>[Tool call #5 for 'read_file']</code> 拼在 tool 結果 content 的第一行，然後整條 <code>role: "tool"</code> 存進歷史。狀態欄（<code>_get_system_hint</code>）裡沒有計數；system prompt 只有「看到大數字要換策略」這條規則，數字本身在工具結果裡。</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">模型用 <code>rewrite_todo_list</code> 建了三項 TODO。之後每一輪，它在哪裡看到這份清單？</p>
+<button>每輪末尾狀態欄</button>
+<button>只在工具結果裡</button>
+<button>系統提示的開頭</button>
+<p class="why"><code>_tool_rewrite_todo_list</code> 的回傳值只有 <code>kept_items / new_items / total_items</code> 幾個數字，清單內容不在工具結果裡。清單是 <code>_get_system_hint</code> 每一輪用 <code>_format_todo_list</code> 重新排版成 <code>=== CURRENT TASKS ===</code>，接在歷史複本末尾送出；system prompt 只有使用規則，沒有清單。</p>
+</div>
+
+<h2>主要來源</h2>
+<p>讀原書 <a href="https://github.com/bojieli/ai-agent-book/tree/main/chapter2/system-hint">《深入理解 AI Agent》chapter2/system-hint README</a>（本機副本在 <code>~/tutorials/ai-agent-book/chapter2/system-hint/</code>），「System Hint 如何工作」一節就是本課的 5 行程式。想知道「為什麼 context 要精簡、為什麼要 note-taking」再讀 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic — Effective Context Engineering for AI Agents</a>。</p>
+
+<p class="note">看不懂的地方直接問我（agent）：把 agent.py 的那幾行貼過來問「這一段在幹麻」即可。</p>
+
+<div class="nav">
+<span><a href="0003-memory.html">← 上一課：記憶</a> · <a href="../reference/agent-py-map.html">agent.py 地圖</a> · <a href="../reference/glossary.html">名詞表</a></span>
+<span><a href="0005-planning.html">下一課：規劃與 TODO →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

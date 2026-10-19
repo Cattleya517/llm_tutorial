@@ -30,3 +30,6 @@ vit_cifar10.pt
 .claude/settings.local.json
 .vscode/settings.json
 
+
+# Agent run artifacts
+agent_basic/trajectory.json

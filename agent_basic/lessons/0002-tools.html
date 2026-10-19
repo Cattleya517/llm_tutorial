@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 2 課：工具</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+
+<h1>第 2 課 · 工具：契約與實作是兩個地方</h1>
+<p class="meta">agent_basic 讀書會 · 約 14 分鐘 · 對照檔案：<code>01_loop.py</code> 的 <code>TOOLS</code> / <code>run_tool</code> → <code>agent.py</code> 的 <code>_get_tools_description</code>、<code>_execute_tool</code>、<code>_tool_execute_command</code></p>
+
+<div class="win">
+<strong>這一課的收穫：</strong>讀完後看到 agent.py 的任何一個工具，你能找到它的 JSON Schema（模型看到的那份）和它的 Python 實作（真正跑的那份），並說出兩者是靠「工具名字」和「參數名」對上的，中間沒有任何魔法。
+</div>
+
+<h2>先回想第 1 課：模型只會「說」，不會「做」</h2>
+<p>模型回覆裡的 <code>tool_calls</code> 只是一段 JSON：「我要叫 <code>execute_command</code>，參數是 <code>{"command": "ls"}</code>」。它沒有辦法碰你的硬碟。所以一個工具一定拆成兩份：</p>
+<ol>
+<li><strong>契約</strong>：用 JSON Schema 告訴模型「有這個工具、吃哪些參數」。送進 API 的 <code>tools=</code> 參數就是它。</li>
+<li><strong>實作</strong>：模型點名之後，真正跑 <code>subprocess</code>、開檔案的 Python 函式。</li>
+</ol>
+<p>在 01_loop.py 裡這兩份分別叫 <code>TOOLS</code> 和 <code>run_tool</code>，相隔十幾行。在 agent.py 裡同樣是兩個地方，只是各自長了十倍。</p>
+
+<h2>契約：<code>_get_tools_description</code></h2>
+<p><kbd>⌘F</kbd> 搜 <code>def _get_tools_description</code>（約第 291 行）。它回傳一個 list，裡面是 6 個工具的 schema：前 4 個固定（<code>read_file</code>、<code>write_file</code>、<code>code_interpreter</code>、<code>execute_command</code>），後 2 個 TODO 工具只在 <code>config.enable_todo_list</code> 打開時 <code>extend</code> 進去。這個 list 在 <code>execute_task</code> 裡每一輪都以 <code>tools=self._get_tools_description()</code> 送給模型。</p>
+<p>拿 <code>execute_command</code> 那一塊來看（節錄）：</p>
+<pre><code>{
+    "type": "function",
+    "function": {
+<span class="hl">        "name": "execute_command",</span>
+        "description": "Execute a shell command in the current directory",
+        "parameters": {
+            "type": "object",
+            "properties": {
+<span class="hl">                "command":     {"type": "string", "description": "Shell command to execute"},</span>
+                "working_dir": {"type": "string", "description": "Optional working directory ..."}
+            },
+            "required": ["command"]
+        }
+    }
+}</code></pre>
+<p>三件事值得停下來講：</p>
+<ul>
+<li><strong>模型看到的只有這份。</strong>它看不到 <code>_tool_execute_command</code> 的任何一行 Python，不知道有 30 秒 timeout、不知道 <code>cd</code> 會被特別處理。模型「以為」工具會做什麼，完全來自 <code>description</code> 和每個參數的 <code>description</code>。</li>
+<li><strong><code>required</code> 決定模型一定會給哪些參數。</strong><code>working_dir</code> 不在裡面，所以模型多半省略它；對應的 Python 參數就必須有預設值（後面會看到 <code>working_dir: Optional[str] = None</code>）。</li>
+<li><strong>這就是 Anthropic 所說的 ACI（agent-computer interface）。</strong>他們建議把工具描述當成給新同事看的 docstring 來寫：參數名要直白、example 要給、容易搞錯的邊界要寫出來，因為模型只能靠這些字決定怎麼用 <a href="https://www.anthropic.com/engineering/building-effective-agents">[1]</a>。agent.py 的 <code>begin_line</code> 描述特別寫了「1-based indexing. E.g., begin_line=10 starts from line 10」就是這個精神。</li>
+</ul>
+
+<h2>實作：<code>_execute_tool</code> 的 dispatch</h2>
+<p>搜 <code>def _execute_tool</code>（約第 439 行）。去掉計時與錯誤處理後，核心只有這樣：</p>
+<pre><code>def _execute_tool(self, tool_name, arguments):
+    try:
+<span class="hl">        if tool_name == "read_file":
+            result = self._tool_read_file(**arguments)</span>
+        elif tool_name == "write_file":
+            result = self._tool_write_file(**arguments)
+        elif tool_name == "code_interpreter":
+            result = self._tool_code_interpreter(**arguments)
+<span class="hl">        elif tool_name == "execute_command":
+            result = self._tool_execute_command(**arguments)</span>
+        elif tool_name == "rewrite_todo_list": ...
+        elif tool_name == "update_todo_status": ...
+        else:
+            return {"error": f"Unknown tool: {tool_name}"}, error, None
+        return result, None, duration_ms
+<span class="hl">    except Exception as e:
+        return {"error": error_detail}, error_detail, duration_ms</span></code></pre>
+<p>兩份要「對上」的地方就在這裡，而且有兩層：</p>
+<ol>
+<li><strong>工具名字</strong>：schema 的 <code>"name": "execute_command"</code> ↔ <code>if tool_name == "execute_command"</code>。純字串比對，打錯一個字母就掉進 <code>else: Unknown tool</code>。</li>
+<li><strong>參數名字</strong>：<code>**arguments</code> 把模型送來的 dict 攤成關鍵字引數，所以 schema 的 <code>properties</code> 鍵名（<code>command</code>、<code>working_dir</code>）必須<em>一字不差</em>等於 <code>def _tool_execute_command(self, command, working_dir=None)</code> 的參數名。多一個模型自創的鍵、或 schema 改名而 Python 沒改，<code>**</code> 就會丟 <code>TypeError</code>。</li>
+</ol>
+<p>注意回傳值是一個三元組 <code>(result, error, duration_ms)</code>，而且<strong>任何例外都被接住</strong>，變成 <code>{"error": ...}</code> 回去。這是刻意的：工具失敗不該讓整個迴圈掛掉，而是讓模型看到錯誤、自己換招。第 4 課會講 <code>error_detail</code> 裡附的「建議」是怎麼生出來的。</p>
+
+<h2>精讀一個實作：<code>_tool_execute_command</code></h2>
+<p>搜 <code>def _tool_execute_command</code>（約第 691 行）。四個工具裡挑它，是因為它最常被叫到，也最能看出「實作裡有模型不知道的事」。</p>
+<pre><code>def _tool_execute_command(self, command: str, working_dir: Optional[str] = None):
+    try:
+        if working_dir is None:                         <span class="cm"># 1. cwd：沒給就用 agent 記住的目前目錄</span>
+            working_dir = self.current_directory
+        elif not os.path.isabs(working_dir):
+            working_dir = os.path.join(self.current_directory, working_dir)
+
+        stripped = command.strip()                      <span class="cm"># 2. 攔截「純」cd</span>
+<span class="hl">        if stripped.startswith('cd ') and not any(t in stripped for t in ('&amp;&amp;', ';', '|')):</span>
+            new_dir = ...
+            if os.path.isdir(new_dir):
+<span class="hl">                self.current_directory = os.path.abspath(new_dir)</span>
+                return {"success": True, "command": command,
+                        "output": f"Changed directory to: {self.current_directory}", "return_code": 0}
+            else:
+                raise FileNotFoundError(f"Directory not found: {new_dir}")
+
+<span class="hl">        result = subprocess.run(command, shell=True, capture_output=True,
+                                text=True, cwd=working_dir, timeout=30)</span>   <span class="cm"># 3. 其他全部丟給 shell</span>
+
+        return {                                        <span class="cm"># 4. 回傳固定形狀的 dict</span>
+            "success": result.returncode == 0,
+            "command": command,
+            "output": result.stdout,
+            "error": result.stderr if result.stderr else None,
+            "return_code": result.returncode,
+            "working_dir": working_dir
+        }
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"Command timed out after 30 seconds: {command}")</code></pre>
+
+<h3>為什麼要攔 <code>cd</code>？</h3>
+<p>每次 <code>subprocess.run</code> 都是一個新的 shell，跑完就消失。模型若先叫 <code>cd src</code> 再叫 <code>ls</code>，第二次的 shell 根本不記得第一次 cd 過。所以 agent 自己用 <code>self.current_directory</code> 記住「現在在哪」，純 <code>cd</code> 不交給 shell，而是改這個屬性；之後每次 <code>subprocess.run(cwd=working_dir)</code> 都從這裡出發。<code>read_file</code>、<code>write_file</code> 的相對路徑也都接到 <code>self.current_directory</code>，所以這一個屬性就是整個 agent 的「目前目錄」。</p>
+<p>注意判斷條件：只有<strong>不含</strong> <code>&amp;&amp;</code>、<code>;</code>、<code>|</code> 的 <code>cd</code> 才攔。<code>cd proj &amp;&amp; make</code> 會直接掉到下面的 <code>subprocess.run</code>，make 會在 proj 裡跑，但 <code>self.current_directory</code> 不會變。程式註解有寫原因：若硬攔，會把 <code>proj &amp;&amp; make</code> 整串當成目錄名。</p>
+
+<h3>回傳 dict 的形狀是給模型看的</h3>
+<p><code>execute_task</code> 會把這個 dict <code>json.dumps</code> 後當 <code>role: "tool"</code> 訊息送回去。所以 <code>success</code>、<code>output</code>、<code>error</code>、<code>return_code</code> 這幾個鍵名其實是「工具結果的契約」，模型看到 <code>"success": false</code> 和非零的 <code>return_code</code> 就知道要換做法。</p>
+<p class="note"><code>shell=True</code> 加上任何字串都可以跑，表示這個工具<strong>沒有 sandbox</strong>：模型叫 <code>rm -rf</code> 它就 <code>rm -rf</code>。timeout=30 只防「跑太久」，不防「做壞事」。詳細在第 6 課。</p>
+
+<h2>另外三個工具：掃過就好</h2>
+<table>
+<tr><th>工具</th><th>Python 參數（= schema 的 properties）</th><th>實作重點</th></tr>
+<tr><td><code>_tool_read_file</code>（約 525）</td><td><code>file_path</code>, <code>begin_line=None</code>, <code>number_lines=None</code></td><td>相對路徑接 <code>current_directory</code>；先讀 1024 bytes 判斷是不是 binary；給了 <code>begin_line</code> 就只回那一段，並附 <code>total_lines</code>、<code>partial_read: True</code>，讓模型知道還有沒讀完的部分。</td></tr>
+<tr><td><code>_tool_write_file</code>（約 639）</td><td><code>file_path</code>, <code>content</code></td><td><code>os.makedirs(..., exist_ok=True)</code> 自動建目錄，然後整個覆寫。回 <code>bytes_written</code>、<code>lines_written</code>。</td></tr>
+<tr><td><code>_tool_code_interpreter</code>（約 661）</td><td><code>code</code></td><td>schema 說「restricted environment」，實作其實就是 <code>exec(code, exec_ns)</code> 加 <code>redirect_stdout</code> 抓輸出。沒有任何限制，描述跟實作不一致是這份程式的已知落差。</td></tr>
+</table>
+<p>剩下兩個 <code>_tool_rewrite_todo_list</code>、<code>_tool_update_todo_status</code> 的 dispatch 跟上面一樣，但它們改的是 agent 自己的狀態而不是外部世界，留到第 5 課。</p>
+
+<h2>回到 <code>execute_task</code>：參數是怎麼進來的</h2>
+<p>搜 <code>raw_args = tool_call.function.arguments</code>（約第 873 行）。模型送來的參數不是 dict，是<strong>一段 JSON 字串</strong>，得先 <code>json.loads</code>。agent.py 比 01_loop.py 多了一個保護：</p>
+<pre><code>raw_args = tool_call.function.arguments or "{}"
+try:
+    function_args = json.loads(raw_args)
+<span class="hl">except json.JSONDecodeError as exc:
+    err = f"Invalid tool arguments (not valid JSON): {exc}. Raw arguments: {raw_args[:500]}"
+    self.conversation_history.append({"role": "tool", "tool_call_id": tool_call.id,
+                                      "content": json.dumps({"error": err})})
+    continue</span>
+
+result, error, duration_ms = self._execute_tool(function_name, function_args)</code></pre>
+<p>模型偶爾會吐出壞掉的 JSON（截斷、多一個逗號）。01_loop.py 會在 <code>json.loads</code> 直接炸掉；agent.py 則把錯誤<strong>當成工具結果</strong>送回去，<code>continue</code> 到下一個 tool_call，迴圈繼續。和 <code>_execute_tool</code> 的 <code>except Exception</code> 是同一個哲學：壞事發生時，回報給模型，不要中斷。</p>
+
+<h2>對照表：01_loop.py ↔ agent.py</h2>
+<table>
+<tr><th>01_loop.py</th><th>agent.py</th><th>差在哪</th></tr>
+<tr><td><code>TOOLS</code>（1 個 schema）</td><td><code>_get_tools_description()</code>（6 個）</td><td>變成方法，因為 TODO 工具要看 config 決定加不加</td></tr>
+<tr><td><code>run_tool(name, args)</code></td><td><code>_execute_tool(tool_name, arguments)</code></td><td>同樣 if/elif 比名字；多了 <code>**arguments</code> 攤開、try/except、計時</td></tr>
+<tr><td><code>run_tool</code> 裡的 <code>subprocess.run(...)</code></td><td><code>_tool_execute_command(command, working_dir)</code></td><td>拆成獨立方法；多了 cwd 與 <code>cd</code> 攔截</td></tr>
+<tr><td><code>return f"unknown tool: {name}"</code></td><td><code>else: return {"error": "Unknown tool: ..."}</code></td><td>一樣是把錯誤訊息回給模型，不是 raise</td></tr>
+<tr><td>回傳 <code>str</code></td><td>回傳 <code>(result_dict, error, duration_ms)</code></td><td><code>execute_task</code> 再 <code>json.dumps(result)</code> 成字串</td></tr>
+<tr><td><code>json.loads(call.function.arguments)</code></td><td>同一行包在 <code>try/except JSONDecodeError</code></td><td>壞 JSON 回錯誤訊息而不是崩潰</td></tr>
+</table>
+
+<div class="win" style="border-style: dashed">
+<strong>進階一句話：</strong>「兩個地方要對上」這件事其實可以消掉。把每個工具的參數寫成一個 pydantic <code>BaseModel</code>，<code>Model.model_json_schema()</code> 就能直接產出 <code>parameters</code> 那一段，實作再吃同一個 model，名字就只在一處出現。agent.py 已經在 TODO 用了 pydantic，但工具契約仍是手寫；這一課不實作，只記得有這條路。語法見 <a href="https://docs.pydantic.dev/latest/concepts/models/">pydantic — Models</a>。
+</div>
+
+<div class="skip">
+<h3>這些可以先跳過</h3>
+<ul>
+<li><code>_get_detailed_error</code> / <code>_get_error_suggestions</code> 的內容：只是把 exception 字串比對幾個關鍵字，附上「檢查路徑」之類的建議。知道它們在 <code>_execute_tool</code> 的 <code>except</code> 裡被呼叫就夠，第 4 課再看。</li>
+<li><code>_tool_read_file</code> 裡的 <code>codecs.getincrementaldecoder</code>：處理 1024 bytes 邊界切到半個中文字的細節。</li>
+<li><code>start_time</code> / <code>duration_ms</code> 計時：只進 <code>ToolCall</code> 紀錄和 trajectory，不影響模型看到的東西。</li>
+<li><code>_tool_code_interpreter</code> 註解裡關於 <code>exec</code> namespace 的說明：Python 作用域的小坑，跟 agent 無關。</li>
+</ul>
+</div>
+
+
+<h2>預測一下</h2>
+<p class="note">選一個答案，立刻看解釋。檢查的是「名字對上」和「錯誤回給模型」這兩條有沒有讀進去。</p>
+
+<div class="quiz" data-answer="1">
+<p class="q">把 schema 裡 <code>execute_command</code> 的參數 <code>command</code> 改名成 <code>cmd</code>，但 <code>_tool_execute_command(self, command, ...)</code> 沒改。模型照新 schema 送出 <code>{"cmd": "ls"}</code>，接下來會怎樣？</p>
+<button>程式當場崩潰</button>
+<button>錯誤回給模型</button>
+<button>工具照常執行</button>
+<p class="why"><code>self._tool_execute_command(**{"cmd": "ls"})</code> 會丟 <code>TypeError: unexpected keyword argument 'cmd'</code>，但它發生在 <code>_execute_tool</code> 的 <code>try</code> 裡，被 <code>except Exception</code> 接住，變成 <code>{"error": "Tool 'execute_command' failed with TypeError: ..."}</code> 當 <code>role: "tool"</code> 送回去。模型可能反覆重試同一個錯誤，直到放棄或用完 <code>max_iterations</code>；過程中不會崩潰，工具也跑不起來。</p>
+</div>
+
+<div class="quiz" data-answer="1">
+<p class="q">模型決定要不要用 <code>code_interpreter</code>、怎麼用的時候，它對這個工具的 Python 實作知道多少？</p>
+<button>看到完整的程式碼</button>
+<button>只看到描述和參數</button>
+<button>什麼名字都看不到</button>
+<p class="why">送進 API 的只有 <code>_get_tools_description</code> 回傳的 schema：<code>name</code>、<code>description</code>、<code>parameters</code>。模型看不到 <code>exec(code, exec_ns)</code>，所以它會相信描述裡的「restricted environment」。這就是為什麼 Anthropic 說工具描述要當成給人看的文件來寫：那是模型唯一的資訊來源。</p>
+</div>
+
+<div class="quiz" data-answer="2">
+<p class="q">目前 <code>self.current_directory</code> 是 <code>/work</code>，模型叫 <code>execute_command</code> 跑 <code>cd proj &amp;&amp; make</code>。執行完之後呢？</p>
+<button>目前目錄變成該處</button>
+<button>找不到目錄而報錯</button>
+<button>目錄不變指令照跑</button>
+<p class="why">字串含 <code>&amp;&amp;</code>，所以不符合「純 cd」的攔截條件，整串交給 <code>subprocess.run(..., shell=True, cwd="/work")</code>。shell 會在 proj 裡跑 make，但那個 shell 結束就沒了，<code>self.current_directory</code> 仍是 <code>/work</code>。只有單獨的 <code>cd proj</code> 才會改到屬性。</p>
+</div>
+
+<h2>主要來源</h2>
+<p>工具契約與 <code>tool_calls</code> 的格式看 <a href="https://openrouter.ai/docs/guides/features/tool-calling">OpenRouter — Tool &amp; Function Calling</a>，它的 <code>tools</code> 範例和 <code>_get_tools_description</code> 的結構一模一樣。「描述要寫給模型看得懂」的設計原則看 <a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic — Building Effective Agents</a> 附錄 2「Prompt engineering your tools」。</p>
+
+<p class="note">看不懂的地方直接問我（agent）：把某個工具的 schema 和 <code>_tool_*</code> 函式一起貼過來問「這兩段怎麼對上」即可。</p>
+
+<div class="nav">
+<span><a href="0001-the-loop.html">← 上一課：迴圈</a> · <a href="../reference/agent-py-map.html">agent.py 地圖</a> · <a href="../reference/glossary.html">名詞表</a></span>
+<span><a href="0003-memory.html">下一課：記憶 →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
