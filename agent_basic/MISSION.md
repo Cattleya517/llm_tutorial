@@ -1,7 +1,7 @@
 # Mission: 讀懂一個 AI agent 的實作（agent_basic/agent.py）
 
 ## Why
-讀書會要帶大家在 VSCode 裡一起看 `agent.py`（約 1000 行的 SystemHintAgent），
+讀書會要帶大家在 VSCode 裡一起看 `agent.py`（約 1000 行的 Agent），
 目標不是背下每一行，而是之後自己開 agent 專案時，看到任何一段程式都能說出
 「喔，這一部分是在幹麻」—— 迴圈、工具、記憶、提示、規劃、保護措施各自長什麼樣。
 

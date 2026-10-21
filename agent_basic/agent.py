@@ -1,7 +1,6 @@
 """
-System-Hint Enhanced AI Agent
-An agent that demonstrates advanced trajectory management with system hints,
-including timestamps, tool call tracking, TODO lists, and detailed error messages.
+A minimal-but-complete AI agent: tool-calling loop, conversation memory,
+per-turn status hints, a TODO planner, and trajectory logging.
 """
 
 import codecs
@@ -80,8 +79,8 @@ class ToolCall(BaseModel):
     duration_ms: Optional[int] = None
 
 
-class SystemHintConfig(BaseModel):
-    """Configuration for system hints"""
+class AgentConfig(BaseModel):
+    """Feature switches for the agent (hints, TODO, trajectory)"""
     enable_timestamps: bool = True
     enable_tool_counter: bool = True
     enable_todo_list: bool = True
@@ -93,25 +92,25 @@ class SystemHintConfig(BaseModel):
     trajectory_file: str = "trajectory.json"  # File to save trajectory to
 
 
-class SystemHintAgent:
+class Agent:
     """
-    AI Agent with enhanced system hints for better trajectory management
+    Tool-calling AI agent (OpenRouter)
     """
     
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
-                 config: Optional[SystemHintConfig] = None, verbose: bool = True):
+                 config: Optional[AgentConfig] = None, verbose: bool = True):
         """
         Initialize the agent (OpenRouter only)
         
         Args:
             api_key: OpenRouter API key; defaults to the OPENROUTER_API_KEY env var
             model: OpenRouter model id; defaults to OPENROUTER_MODEL env var, then DEFAULT_MODEL
-            config: System hint configuration
+            config: Feature switches (AgentConfig)
             verbose: If True, log full details
         """
         self.provider = "openrouter"
         self.verbose = verbose
-        self.config = config or SystemHintConfig()
+        self.config = config or AgentConfig()
         
         api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
         if not api_key:
@@ -136,7 +135,7 @@ class SystemHintAgent:
         # Track last messages sent to LLM
         self.last_llm_messages = None
         
-        logger.info(f"System-Hint Agent initialized with provider: {self.provider}, model: {self.model}")
+        logger.info(f"Agent initialized: model={self.model}")
     
     def _init_system_prompt(self):
         """Initialize the system prompt for the conversation"""
@@ -793,7 +792,7 @@ Important: When you have completed all tasks, clearly state "FINAL ANSWER:" foll
     
     def execute_task(self, task: str, max_iterations: int = 20) -> Dict[str, Any]:
         """
-        Execute a task using available tools with system hints
+        Execute a task using available tools
         
         Args:
             task: The task to execute
@@ -1010,7 +1009,7 @@ if __name__ == "__main__":
     #   export OPENROUTER_API_KEY=sk-or-...   (or put it in .env, with optional OPENROUTER_MODEL)
     #   python agent.py "List the files here and summarize what this project does"   # one-shot
     #   python agent.py                                                              # interactive
-    agent = SystemHintAgent()
+    agent = Agent()
 
     def run(task):
         result = agent.execute_task(task)

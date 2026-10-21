@@ -62,7 +62,7 @@
 <tr><td><code>config</code></td><td>哪些 hint 開著，方便事後對照「模型當時看到了什麼」。</td></tr>
 </table>
 
-<p>開關在 <code>SystemHintConfig</code>（約第 83 行）：<code>save_trajectory: bool = True</code>、<code>trajectory_file: str = "trajectory.json"</code>。關掉它 <code>_save_trajectory</code> 第一行就 return。</p>
+<p>開關在 <code>AgentConfig</code>（約第 83 行）：<code>save_trajectory: bool = True</code>、<code>trajectory_file: str = "trajectory.json"</code>。關掉它 <code>_save_trajectory</code> 第一行就 return。</p>
 
 <h3>終端機的 log</h3>
 <p>檔案開頭（約 40–43 行）：<code>logging.basicConfig(level=logging.INFO, format='%(message)s')</code>，所以 log 不帶時間與模組名，乾淨得像 print；接著把 <code>httpx</code> 和 <code>openai</code> 兩個 logger 壓到 WARNING，否則 SDK 每個 HTTP request 都會印一行。跑任務時你看到的 <code>── iteration n/20 ──</code>、<code>🔧 工具名 (call #n)</code>、<code>✅ 結果前 150 字</code>、<code>❌ 錯誤前 150 字</code> 全在 <code>execute_task</code> 裡。</p>

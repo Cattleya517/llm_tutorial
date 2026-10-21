@@ -10,7 +10,7 @@
 <main>
 
 <h1>第 4 課 · System hint：每一輪臨時貼上的狀態欄</h1>
-<p class="meta">agent_basic 讀書會 · 約 12 分鐘 · 對照函式：<code>SystemHintConfig</code>、<code>_get_system_hint</code>、<code>_get_system_state</code>、<code>_get_timestamp</code>、<code>_get_detailed_error</code>，以及 <code>execute_task</code> 裡的 <code>messages_to_send</code>、<code>tool_call_counts</code>、<code>metadata_parts</code></p>
+<p class="meta">agent_basic 讀書會 · 約 12 分鐘 · 對照函式：<code>AgentConfig</code>、<code>_get_system_hint</code>、<code>_get_system_state</code>、<code>_get_timestamp</code>、<code>_get_detailed_error</code>，以及 <code>execute_task</code> 裡的 <code>messages_to_send</code>、<code>tool_call_counts</code>、<code>metadata_parts</code></p>
 
 <div class="win">
 <strong>這一課的收穫：</strong>讀完後你能說出四種 hint 各自「貼在哪裡」——時間戳貼在 <strong>user 訊息前綴</strong>、系統狀態貼在<strong>歷史複本末尾</strong>、工具計數貼在 <strong>tool 結果前綴</strong>、詳細錯誤貼在 <strong>tool 結果內容</strong>——並且解釋為什麼狀態欄只貼在複本上、不存進歷史。
@@ -57,16 +57,16 @@ response = self.client.chat.completions.create(model=self.model, messages=messag
 <p>對照 <code>_get_system_hint</code>（約 270 行）：只有 <code>enable_system_state</code> 和 <code>enable_todo_list</code> 兩個開關決定它回不回 <code>None</code>；內容就是 <code>=== SYSTEM STATE ===</code> 加上（有 TODO 時）<code>=== CURRENT TASKS ===</code>。</p>
 <p class="note">為什麼接在<strong>末尾</strong>、不是改 system prompt？歷史前段不動，provider 的 prompt cache 才打得到；而最新的狀態放在最接近模型「要回答」的位置，最不會被忽略。這跟 Anthropic 講的 context engineering 一致：每一輪送進去的應該是「<em>the smallest set of high-signal tokens</em>」<a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">[2]</a>——狀態欄小、訊號高、不重複。</p>
 
-<h2>SystemHintConfig：每種 hint 一個開關</h2>
-<p>往上翻到 <code>class SystemHintConfig</code>（約 83 行），五個布林值對應五種機制：</p>
-<pre><code>class SystemHintConfig(BaseModel):
+<h2>AgentConfig：每種 hint 一個開關</h2>
+<p>往上翻到 <code>class AgentConfig</code>（約 83 行），五個布林值對應五種機制：</p>
+<pre><code>class AgentConfig(BaseModel):
     enable_timestamps: bool = True        <span class="cm"># [time] 前綴</span>
     enable_tool_counter: bool = True      <span class="cm"># [Tool call #n for 'x']</span>
     enable_todo_list: bool = True         <span class="cm"># 狀態欄裡的 === CURRENT TASKS ===</span>
     enable_detailed_errors: bool = True   <span class="cm"># 關掉就只回 str(e)，沒有建議</span>
     enable_system_state: bool = True      <span class="cm"># 狀態欄裡的 === SYSTEM STATE ===</span></code></pre>
 <p>要做對照實驗，建構時傳一個 config 進去即可：</p>
-<pre><code>agent = SystemHintAgent(config=SystemHintConfig(enable_system_state=False))</code></pre>
+<pre><code>agent = Agent(config=AgentConfig(enable_system_state=False))</code></pre>
 <p>此時若 TODO 清單還是空的，<code>_get_system_hint</code> 回 <code>None</code>，送出模型的那一刻 <code>last_llm_messages</code> 跟 <code>conversation_history</code> 會長得一模一樣（trajectory.json 裡的後者會再多最後一條 assistant 回覆）——這是確認「hint 真的只是臨時貼上」最直接的證據。</p>
 
 <h2>TODO 清單也搭這班車</h2>

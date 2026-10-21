@@ -53,7 +53,7 @@
 <p>模型下一輪再叫一次工具，就再長出 assistant + tool 兩條；最後一輪模型不叫工具、直接講話，長出一條 assistant 就結束。這個 role 的交替順序是 API 規定的：每條 <code>tool</code> 都要接在一條帶 <code>tool_calls</code> 的 <code>assistant</code> 後面 <a href="https://openrouter.ai/docs/guides/features/tool-calling">[2]</a>。</p>
 
 <h2>只 append，不刪 → 多輪記憶免費送</h2>
-<p>再看一次 <code>execute_task</code>：它對 <code>conversation_history</code> 做的操作只有 <code>append</code>，函式開頭沒有 <code>= []</code>，結尾也沒有 <code>clear()</code>。所以同一個 <code>SystemHintAgent</code> 物件連續呼叫兩次 <code>execute_task</code>，第二次的 user 訊息會直接接在第一次的完整對話後面；模型看到的是「上一個任務的全部過程 + 新問題」。這就是為什麼第二個任務可以說「剛才那個檔案」。</p>
+<p>再看一次 <code>execute_task</code>：它對 <code>conversation_history</code> 做的操作只有 <code>append</code>，函式開頭沒有 <code>= []</code>，結尾也沒有 <code>clear()</code>。所以同一個 <code>Agent</code> 物件連續呼叫兩次 <code>execute_task</code>，第二次的 user 訊息會直接接在第一次的完整對話後面；模型看到的是「上一個任務的全部過程 + 新問題」。這就是為什麼第二個任務可以說「剛才那個檔案」。</p>
 <p>搜 <code>def reset</code>（約第 995 行）：它不是 <code>clear()</code>，而是重新呼叫 <code>_init_system_prompt()</code>，<strong>整個 list 換成一條新的 system prompt</strong>。順便也清掉 <code>todo_list</code>、<code>tool_calls</code>、<code>tool_call_counts</code>，那些屬於第 5、6 課。</p>
 <p>再往下看 <code>if __name__ == "__main__"</code>（約第 1008 行）。不帶參數執行就進入 REPL：<code>input("Task > ")</code> 讀一行，打 <code>reset</code> 呼叫 <code>agent.reset()</code>，打 <code>quit</code> 離開，其他都丟給 <code>execute_task</code>。整個 REPL 共用同一個 <code>agent</code>，所以記憶自然跨任務。</p>
 

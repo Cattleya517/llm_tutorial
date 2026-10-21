@@ -24,7 +24,7 @@
 <td>讓 LLM 在迴圈裡根據環境回饋決定下一步要用哪個工具的程式；模型只「說」要做什麼，動手的是 Python。
 <span class="alias">避免：AI 助理、bot、智能體</span>
 <span class="src">來源：<a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic — Building Effective Agents</a>（"LLMs using tools based on environmental feedback in a loop"）</span></td>
-<td><code>class SystemHintAgent</code>（約 96）</td><td><a href="../lessons/0001-the-loop.html">1</a></td></tr>
+<td><code>class Agent</code>（約 96）</td><td><a href="../lessons/0001-the-loop.html">1</a></td></tr>
 
 <tr><td><strong>workflow vs agent</strong></td><td>工作流 vs 代理</td>
 <td>workflow 的步驟順序由程式碼寫死，agent 的下一步由模型在執行期決定；<code>execute_task</code> 不預設要呼叫哪些工具、呼叫幾次，所以是 agent。
@@ -89,7 +89,7 @@
 <tr><td><strong>pydantic BaseModel / model_dump / model_json_schema</strong></td><td>資料模型 / 轉 dict / 產 schema</td>
 <td><code>BaseModel</code> 是帶驗證的資料類別；<code>model_dump()</code> 把它變成普通 dict（<code>mode="json"</code> 時 Enum 轉成字串）；<code>model_json_schema()</code> 從同一個類別產出 JSON Schema。注意 <code>message.model_dump()</code> 是 OpenAI SDK 自己的 pydantic 物件轉 dict，跟本檔的 <code>TodoItem</code>、<code>ToolCall</code> 是兩回事。<strong><code>model_json_schema()</code> 本檔未用</strong>——契約是手寫的，第 2 課只提「可以用它把契約和實作合一」。
 <span class="src">來源：<a href="https://docs.pydantic.dev/latest/concepts/models/">pydantic — Models</a></span></td>
-<td><code>TodoItem</code>、<code>ToolCall</code>、<code>SystemHintConfig</code>（46–95）；<code>_save_trajectory</code> 的 <code>item.model_dump(mode="json")</code>；<code>execute_task</code> 的 <code>message.model_dump()</code></td><td>2、6</td></tr>
+<td><code>TodoItem</code>、<code>ToolCall</code>、<code>AgentConfig</code>（46–95）；<code>_save_trajectory</code> 的 <code>item.model_dump(mode="json")</code>；<code>execute_task</code> 的 <code>message.model_dump()</code></td><td>2、6</td></tr>
 
 <tr><td><strong>tool / function calling</strong></td><td>工具呼叫</td>
 <td>API 層的機制：你用 <code>tools</code> 參數告訴模型有哪些函式，模型用 <code>tool_calls</code> 回答「請幫我呼叫這個」，真正執行永遠在你這邊。
@@ -137,7 +137,7 @@
 <tr><th>English</th><th>中文</th><th>定義</th><th>agent.py</th><th>課</th></tr>
 
 <tr><td><strong>system hint</strong></td><td>狀態欄</td>
-<td>每一輪<strong>臨時</strong>接在歷史複本末尾、送完就丟的一條 <code>role: "user"</code> 訊息，內容是系統狀態（時間、cwd、OS）與目前 TODO。<em>歧義說明：</em>書裡「system hint」泛指五件事（對應 <code>SystemHintConfig</code> 的五個開關：時間戳、工具計數、TODO、詳細錯誤、系統狀態）；本檔 <code>_get_system_hint</code> 只產「狀態 + TODO」這一條是臨時的，時間戳與計數則是直接寫進歷史的（見下兩條）。本 track 說「system hint」時指書的廣義，說「<code>_get_system_hint</code>」時指那一條。
+<td>每一輪<strong>臨時</strong>接在歷史複本末尾、送完就丟的一條 <code>role: "user"</code> 訊息，內容是系統狀態（時間、cwd、OS）與目前 TODO。<em>歧義說明：</em>書裡「system hint」泛指五件事（對應 <code>AgentConfig</code> 的五個開關：時間戳、工具計數、TODO、詳細錯誤、系統狀態）；本檔 <code>_get_system_hint</code> 只產「狀態 + TODO」這一條是臨時的，時間戳與計數則是直接寫進歷史的（見下兩條）。本 track 說「system hint」時指書的廣義，說「<code>_get_system_hint</code>」時指那一條。
 <span class="alias">避免：status bar 直譯「狀態列」、system message（它的 role 是 user 不是 system）</span>
 <span class="src">來源：<a href="https://github.com/bojieli/ai-agent-book/tree/main/chapter2/system-hint">《深入理解 AI Agent》chapter2/system-hint README</a>（為何用 <code>role=user</code> 注入在末尾）</span></td>
 <td><code>_get_system_hint</code>（約 270）、<code>_get_system_state</code>（約 180）；注入點 <code>execute_task</code> 的 <code>messages_to_send.append({"role": "user", "content": system_hint})</code></td><td>4</td></tr>
@@ -182,7 +182,7 @@
 <tr><td><strong>trajectory</strong></td><td>軌跡</td>
 <td>agent 一次任務從頭到尾的完整紀錄：歷史、每次送給模型的實際訊息、所有 tool call 與耗時、TODO；每輪覆寫到 <code>trajectory.json</code>，用來事後回溯。
 <span class="alias">避免：log（log 是 stdout 的摘要，trajectory 是完整狀態）、trace</span></td>
-<td><code>_save_trajectory</code>（約 216）、<code>ToolCall</code>（約 72）、<code>self.last_llm_messages</code>；<code>SystemHintConfig.trajectory_file</code></td><td>6</td></tr>
+<td><code>_save_trajectory</code>（約 216）、<code>ToolCall</code>（約 72）、<code>self.last_llm_messages</code>；<code>AgentConfig.trajectory_file</code></td><td>6</td></tr>
 
 <tr><td><strong>truncation</strong></td><td>截斷工具結果</td>
 <td>把過長的工具輸出切到固定長度再塞回歷史，避免一個 <code>cat</code> 大檔就吃光 context window。<strong>agent.py 沒有做</strong>——<code>tool_content = json.dumps(result)</code> 原樣進歷史；檔案裡的 <code>[:150]</code>、<code>[:200]</code> 只截 log 顯示，<code>max_tokens=8192</code> 是限模型輸出，都不是這件事。01_loop.py 的 <code>result[:4000]</code> 才是。
