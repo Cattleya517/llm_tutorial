@@ -48,6 +48,13 @@ self.last_llm_messages = messages_to_send              <span class="cm"># 4. 留
 
 response = self.client.chat.completions.create(model=self.model, messages=messages_to_send, ...)</code></pre>
 
+<p>攤開來看，每一輪實際送出的內容長這樣：</p>
+<pre><code>第 1 次呼叫: [system, user任務,                             HINT₁]
+第 2 次呼叫: [system, user任務, asst₁, tool₁,               HINT₂]   <span class="cm">← HINT₁ 已經不在</span>
+第 3 次呼叫: [system, user任務, asst₁, tool₁, asst₂, tool₂, HINT₃]
+...
+第 20 次:    [system, user任務, ...19 輪的紀錄...,           HINT₂₀]  <span class="cm">← 只有一份</span></code></pre>
+
 <p>所以狀態欄<strong>每一輪都送</strong>（模型永遠看得到），但<strong>從不 append 到 <code>self.conversation_history</code></strong>。下一輪再重新 <code>.copy()</code>、重新生成、重新接上。三個理由：</p>
 <ol>
 <li><strong>會過期。</strong>cwd 會因為 <code>cd</code> 改變、時間一直走、TODO 狀態一直變。存進歷史的舊狀態欄只會跟新的打架。</li>
