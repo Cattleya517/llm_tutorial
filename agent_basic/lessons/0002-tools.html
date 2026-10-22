@@ -126,7 +126,19 @@
 <p>剩下兩個 <code>_tool_rewrite_todo_list</code>、<code>_tool_update_todo_status</code> 的 dispatch 跟上面一樣，但它們改的是 agent 自己的狀態而不是外部世界，留到第 5 課。</p>
 
 <h2>回到 <code>execute_task</code>：參數是怎麼進來的</h2>
-<p>搜 <code>raw_args = tool_call.function.arguments</code>（約第 873 行）。模型送來的參數不是 dict，是<strong>一段 JSON 字串</strong>，得先 <code>json.loads</code>。agent.py 比 01_loop.py 多了一個保護：</p>
+<p>搜 <code>raw_args = tool_call.function.arguments</code>（約第 873 行）。模型送來的參數不是 dict，是<strong>一段 JSON 字串</strong>，得先 <code>json.loads</code>。</p>
+<p>一個<strong>正確</strong>的例子。模型想執行 <code>ls -la</code>，回覆裡的 <code>tool_call</code> 長這樣：</p>
+<pre><code>tool_call.id                  <span class="cm"># "call_abc123"</span>
+tool_call.function.name       <span class="cm"># "execute_command"</span>
+tool_call.function.arguments  <span class="cm"># '{"command": "ls -la", "working_dir": "src"}'   ← 注意外層的單引號：這是 str</span>
+
+function_args = json.loads(raw_args)
+<span class="cm"># {'command': 'ls -la', 'working_dir': 'src'}                                   ← 變成 dict 了</span>
+
+self._tool_execute_command(**function_args)
+<span class="cm"># 等於 _tool_execute_command(command="ls -la", working_dir="src")</span></code></pre>
+<p>三件事要對得上：JSON 的 key（<code>command</code>、<code>working_dir</code>）＝ schema 的 <code>properties</code> ＝ Python 函式的參數名。<code>working_dir</code> 不在 <code>required</code> 裡，模型也可以只送 <code>'{"command": "ls -la"}'</code>，這時 Python 那邊用預設值 <code>None</code>。</p>
+<p>agent.py 比 01_loop.py 多了一個保護：</p>
 <pre><code>raw_args = tool_call.function.arguments or "{}"
 try:
     function_args = json.loads(raw_args)

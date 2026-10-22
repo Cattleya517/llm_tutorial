@@ -32,7 +32,7 @@ def _reasoning_safe_temperature(model, requested=1.0):
     return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "moonshotai/kimi-k2.6"
+DEFAULT_MODEL = "minimax/minimax-m3"
 
 
 # Configure logging
@@ -108,6 +108,7 @@ class Agent:
             config: Feature switches (AgentConfig)
             verbose: If True, log full details
         """
+        # (1) The LLM part of the agent.
         self.provider = "openrouter"
         self.verbose = verbose
         self.config = config or AgentConfig()
@@ -123,7 +124,8 @@ class Agent:
         self.tool_calls: List[ToolCall] = []
         self.todo_list: List[TodoItem] = []
         self.next_todo_id = 1
-        
+
+        # (2) The context window part of the agent.
         # Initialize conversation history
         self.conversation_history = []
         self.simulated_time = datetime.now()  # For demo time simulation
@@ -811,7 +813,8 @@ Important: When you have completed all tasks, clearly state "FINAL ANSWER:" foll
         
         iteration = 0
         final_answer = None
-        
+
+        # The ReAct loop: the agent alternates between reasoning and acting (tool calls)
         while iteration < max_iterations:
             iteration += 1
             logger.info(f"\n── iteration {iteration}/{max_iterations} ──")
@@ -1019,19 +1022,17 @@ if __name__ == "__main__":
         print("\n=== FINAL ANSWER ===\n", result["final_answer"])
         print(f"\niterations={result['iterations']} tool_calls={len(result['tool_calls'])} trajectory={result['trajectory_file']}")
 
-    if len(sys.argv) > 1:
-        run(" ".join(sys.argv[1:]))
-    else:
-        # ponytail: minimal REPL; history persists across tasks because execute_task only appends.
-        print(f"model={agent.model}  commands: reset | quit")
-        while True:
-            try:
-                task = input("\nTask > ").strip()
-            except (EOFError, KeyboardInterrupt):
-                break
-            if task in ("quit", "exit"):
-                break
-            if task == "reset":
-                agent.reset(); print("state reset"); continue
-            if task:
-                run(task)
+
+    # ponytail: minimal REPL; history persists across tasks because execute_task only appends.
+    print(f"model={agent.model}  commands: reset | quit")
+    while True:
+        try:
+            task = input("\nTask > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if task in ("quit", "exit"):
+            break
+        if task == "reset":
+            agent.reset(); print("state reset"); continue
+        if task:
+            run(task)

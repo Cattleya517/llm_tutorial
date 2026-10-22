@@ -10,7 +10,7 @@ from openai import OpenAI
 
 load_dotenv()                                   # .env 裡放 OPENROUTER_API_KEY / OPENROUTER_MODEL
 client = OpenAI(api_key=os.environ["OPENROUTER_API_KEY"], base_url="https://openrouter.ai/api/v1")
-MODEL = os.getenv("OPENROUTER_MODEL", "moonshotai/kimi-k2.6")
+MODEL = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m3")
 
 # ── 1. 工具契約：告訴模型「你可以呼叫什麼」。這是 JSON Schema，模型只看得到這個 ──
 TOOLS = [{
